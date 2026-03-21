@@ -457,6 +457,47 @@ result, _ := model.PydanticJSON("Generate a user profile.", "Profile", map[strin
 
 See the [outlines README](outlines/README.md).
 
+### diffusersgo — Image Generation
+
+Generate images from text using [Hugging Face Diffusers](https://github.com/huggingface/diffusers) (Stable Diffusion, FLUX, etc.).
+
+```bash
+go get github.com/i2y/pyffi/diffusersgo
+```
+
+```go
+pipe, _ := diffusersgo.New("stable-diffusion-v1-5/stable-diffusion-v1-5",
+    diffusersgo.WithDevice("mps"),
+    diffusersgo.WithDtype("float16"),
+)
+defer pipe.Close()
+
+img, _ := pipe.TextToImage("A cat in space, oil painting")
+img.Save("cat.png")
+```
+
+See the [diffusersgo README](diffusersgo/README.md).
+
+### smolagentsgo — Lightweight Agents
+
+Build agents with [smolagents](https://github.com/huggingface/smolagents) that write Python code to orchestrate tools and solve multi-step tasks.
+
+```bash
+go get github.com/i2y/pyffi/smolagentsgo
+```
+
+```go
+client, _ := smolagentsgo.New(
+    smolagentsgo.WithLiteLLM("anthropic/claude-3-haiku-20240307", apiKey),
+)
+defer client.Close()
+
+result, _ := client.Run("What is 15 * 23?")
+fmt.Println(result) // 345
+```
+
+See the [smolagentsgo README](smolagentsgo/README.md).
+
 ### casdk — Claude Agent SDK
 
 Go wrapper for the [Claude Agent SDK](https://github.com/anthropics/claude-agent-sdk-python) with hooks, plugins, and in-process MCP tools.
