@@ -307,7 +307,7 @@ yourpkg/
 └── ...
 ```
 
-You don't need to wrap every generated function — pick and choose what to expose. You can also bypass the generated bindings entirely and use `rt.Exec()` / `rt.Eval()` with Python code strings for cases where that's simpler (e.g., constructing complex objects, passing callbacks, or calling functions with many optional parameters). Mixing both approaches in the same package is fine. The `casdk` package in this repository is a practical example — it uses the generated `internal/sdk/` for some operations (module import, simple method calls) while using inline Python code generation for others (option building, callback registration).
+You don't need to wrap every generated function — pick and choose what to expose. You can also bypass the generated bindings entirely and use `rt.Exec()` / `rt.Eval()` with Python code strings for cases where that's simpler (e.g., variadic expression arguments). Mixing both approaches in the same package is fine. The `polarsgo` package in this repository is a practical example — it uses the generated `internal/sdk/` for methods with fixed signatures (Head, Tail, Join, Sort, etc.) while using inline Python code for expression-based methods (Filter, WithColumns, GroupBy).
 
 ## Docker Deployment
 
@@ -357,41 +357,125 @@ COPY --from=builder /app/myapp /usr/local/bin/myapp
 CMD ["myapp"]
 ```
 
-## Claude Agent SDK Wrapper
+## Wrapper Packages
 
-The `casdk` subpackage provides a Go-idiomatic wrapper around the [Claude Agent SDK](https://github.com/anthropics/claude-agent-sdk-python). It is an independent Go module:
+pyffi-powered Go bindings for popular Python libraries. Each is an independent Go module — install only what you need.
+
+### polarsgo — DataFrames
+
+Fast DataFrame operations from Go using [Polars](https://pola.rs). Filter, sort, join, group, aggregate, LazyFrame optimization, and SQL queries.
+
+```bash
+go get github.com/i2y/pyffi/polarsgo
+```
+
+```go
+pl, _ := polarsgo.New()
+defer pl.Close()
+
+df, _ := pl.ReadCSV("data.csv")
+result, _ := df.Filter("col('age') > 30").Sort("age", true)
+fmt.Println(result)
+
+// SQL queries
+sqlResult, _ := pl.SQL("SELECT dept, AVG(age) FROM t GROUP BY dept", map[string]*polarsgo.DataFrame{"t": df})
+```
+
+See the [polarsgo README](polarsgo/README.md) for the full API including LazyFrame, Join, GroupBy, and more.
+
+### sbert — Sentence Embeddings
+
+Generate semantic embeddings using 15,000+ [sentence-transformers](https://www.sbert.net) models.
+
+```bash
+go get github.com/i2y/pyffi/sbert
+```
+
+```go
+model, _ := sbert.New("all-MiniLM-L6-v2")
+defer model.Close()
+
+embeddings, _ := model.Encode([]string{"Hello world", "Go is great"})
+sim, _ := model.Similarity(embeddings, embeddings)
+```
+
+See the [sbert README](sbert/README.md).
+
+### hfpipe — Hugging Face Pipelines
+
+Local ML inference — text generation, classification, summarization, and more.
+
+```bash
+go get github.com/i2y/pyffi/hfpipe
+```
+
+```go
+pipe, _ := hfpipe.New("text-classification", "distilbert/distilbert-base-uncased-finetuned-sst-2-english")
+defer pipe.Close()
+
+results, _ := pipe.Run("I love this movie!")  // [{label:POSITIVE score:0.9999}]
+```
+
+See the [hfpipe README](hfpipe/README.md).
+
+### dspygo — DSPy
+
+Program (not prompt) language models with typed signatures, pipelines, and automatic prompt optimization.
+
+```bash
+go get github.com/i2y/pyffi/dspygo
+```
+
+```go
+client, _ := dspygo.New(dspygo.WithLM("openai/gpt-4o-mini"))
+defer client.Close()
+
+classify := client.PredictSig(dspygo.Signature{
+    Doc: "Classify sentiment.",
+    Inputs:  []dspygo.Field{{Name: "sentence", Type: "str"}},
+    Outputs: []dspygo.Field{{Name: "sentiment", Type: `Literal["positive", "negative", "neutral"]`}},
+})
+result, _ := classify.Call(dspygo.KV{"sentence": "I love it!"})
+```
+
+See the [dspygo README](dspygo/README.md).
+
+### outlines — Structured Generation
+
+Constrained decoding — guarantee LLM output matches a JSON schema, regex, or choice set.
+
+```bash
+go get github.com/i2y/pyffi/outlines
+```
+
+```go
+model, _ := outlines.NewOllama("llama3.2")
+defer model.Close()
+
+result, _ := model.PydanticJSON("Generate a user profile.", "Profile", map[string]string{"name": "str", "age": "int"})
+```
+
+See the [outlines README](outlines/README.md).
+
+### casdk — Claude Agent SDK
+
+Go wrapper for the [Claude Agent SDK](https://github.com/anthropics/claude-agent-sdk-python) with hooks, plugins, and in-process MCP tools.
 
 ```bash
 go get github.com/i2y/pyffi/casdk
 ```
 
 ```go
-import "github.com/i2y/pyffi/casdk"
-
 client, _ := casdk.New()
 defer client.Close()
 
-// One-off query
-for msg, err := range client.Query(ctx, "What is 2+2?",
-    casdk.WithMaxTurns(1),
-) {
+for msg, err := range client.Query(ctx, "What is 2+2?", casdk.WithMaxTurns(1)) {
     if err != nil { log.Fatal(err) }
-    fmt.Println(msg.Text())
-}
-
-// List sessions (no API key needed)
-sessions, _ := client.ListSessions(casdk.WithLimit(5))
-
-// Interactive session (shares Runtime with client)
-session, _ := client.Session(casdk.WithModel("sonnet"))
-defer session.Close()
-session.Query("Hello!")
-for msg, _ := range session.ReceiveMessages() {
     fmt.Println(msg.Text())
 }
 ```
 
-Requires `ANTHROPIC_API_KEY` environment variable for queries. See the [casdk README](casdk/README.md) for full API documentation including plugins, hooks, custom tools, and more.
+See the [casdk README](casdk/README.md).
 
 ## For LLM Agents
 
