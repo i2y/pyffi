@@ -138,6 +138,7 @@ type config struct {
 	preferUV     bool     // prefer uv-managed Python
 	projectDir   string   // WithUVProject: pyproject.toml directory
 	dependencies []string // Dependencies: inline package requirements
+	skipFinalize bool     // skip Py_Finalize on Close
 }
 
 // Option configures a Runtime.
@@ -157,11 +158,19 @@ func WithVersion(major, minor int) Option {
 	}
 }
 
+// WithSkipFinalize skips Py_Finalize on Close. Use this when Python
+// extensions (e.g. PyTorch) cause SIGSEGV during interpreter shutdown.
+// Resources are reclaimed by the OS when the process exits.
+func WithSkipFinalize() Option {
+	return func(c *config) { c.skipFinalize = true }
+}
+
 // Runtime holds a loaded CPython shared library and its bound C-API functions.
 // Only one Runtime should be active per process because Py_Initialize/Py_Finalize
 // operate on global state. For multi-goroutine usage, use WithGIL or GILEnsure.
 type Runtime struct {
-	handle uintptr
+	handle       uintptr
+	skipFinalize bool
 
 	// --- Phase 1: lifecycle & execution ---
 	pyInitialize      func()
@@ -349,7 +358,7 @@ func New(opts ...Option) (*Runtime, error) {
 		}
 	}
 
-	rt := &Runtime{handle: handle}
+	rt := &Runtime{handle: handle, skipFinalize: cfg.skipFinalize}
 	if err := rt.bindFunctions(); err != nil {
 		return nil, err
 	}
@@ -387,14 +396,14 @@ func New(opts ...Option) (*Runtime, error) {
 func (r *Runtime) Close() error {
 	r.closeOnce.Do(func() {
 		runtime.SetFinalizer(r, nil)
-		// Acquire GIL via autoGIL (works from any thread).
-		g := r.autoGIL()
-		// Set closed BEFORE Py_Finalize so that concurrent finalizers
-		// see the flag and bail out instead of calling into a dead runtime.
 		r.closed.Store(true)
-		r.pyFinalize()
-		// Don't release GIL after Finalize — the interpreter is gone.
-		_ = g
+		if !r.skipFinalize {
+			// Acquire GIL via autoGIL (works from any thread).
+			g := r.autoGIL()
+			r.pyFinalize()
+			// Don't release GIL after Finalize — the interpreter is gone.
+			_ = g
+		}
 	})
 	return nil
 }
