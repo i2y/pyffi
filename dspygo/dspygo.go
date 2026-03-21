@@ -198,7 +198,7 @@ type Field struct {
 
 // Signature defines a typed input/output contract for a DSPy module.
 type Signature struct {
-	Doc     string  // docstring (used as the task description)
+	Doc     string // docstring (used as the task description)
 	Inputs  []Field
 	Outputs []Field
 }

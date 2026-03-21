@@ -9,9 +9,9 @@ import (
 // RunResult contains the output of an agent run.
 // All fields are eagerly extracted; RunResult does not require Close().
 type RunResult struct {
-	finalOutput  string
-	lastAgent    string
-	items        []RunItem
+	finalOutput   string
+	lastAgent     string
+	items         []RunItem
 	inputListJSON string // JSON for multi-turn
 }
 

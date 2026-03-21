@@ -4,7 +4,7 @@ package oasdk
 type ToolDef struct {
 	Name        string
 	Description string
-	Schema      map[string]any                          // JSON Schema for parameters
+	Schema      map[string]any                            // JSON Schema for parameters
 	Handler     func(args map[string]any) (string, error) // Go handler
 }
 
