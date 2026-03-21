@@ -50,7 +50,6 @@ func (m *Message) Usage() *Usage { return m.usage }
 // ContentBlocks returns the content blocks (for assistant messages).
 func (m *Message) ContentBlocks() []ContentBlock { return m.blocks }
 
-
 // Usage holds token usage information.
 type Usage struct {
 	InputTokens              int
