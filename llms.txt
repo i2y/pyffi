@@ -1,0 +1,82 @@
+# pyffi
+
+> pyffi is a pure Go library that calls CPython via purego — no Cgo required.
+> It dynamically loads the CPython shared library at runtime and provides
+> goroutine-safe bindings with automatic GIL management, full type conversion,
+> async support, and uv integration for dependency management.
+
+## Quick Start
+
+- [README](README.md): Installation, usage examples, feature overview
+- [Package Documentation](python.go): godoc with Quick Start, Type Conversions, GIL, Async, Callbacks
+
+## Core API
+
+- [Runtime](python.go): New(), Close(), Exec(), Eval(), RunAsync(), Import(), FromGoValue(), NewList(), NewTuple(), NewDict(), NewSet(), PythonVersion()
+- [Object](object.go): Attr(), Call(), CallKw(), GetItem(), SetItem(), DelItem(), Contains(), Len(), Repr(), Compare(), Iter(), Enter(), Exit(), SetAttr(), Int64(), Float64(), GoString(), Bool(), GoBytes(), GoSlice(), GoMap(), GoValue(), Close()
+- [GIL Management](gil.go): Auto-GIL (all methods acquire GIL automatically), WithGIL() for batching, GILEnsure()/Release() for manual control
+- [Type Conversion](convert.go): Go ↔ Python automatic conversion — bool, int, float, string, bytes, list, tuple, dict, set, None
+- [Errors](errors.go): PythonError with Type, Message, Traceback (Python 3.12+)
+- [Callbacks](callback.go): RegisterFunc() — register Go functions callable from Python, with kwargs support
+- [Module Binding](bind.go): Bind() for convenient module-level function calls
+- [Keywords](kw.go): KW type alias for keyword arguments (map[string]any)
+
+## Async
+
+- [RunAsync / CallAsync](python.go): Execute async Python functions via asyncio
+- [RunAsyncGo / CallAsyncGo](python.go): Non-blocking async in background goroutines
+- [EventLoop](eventloop.go): Persistent asyncio event loop with goroutine integration via run_coroutine_threadsafe
+
+## Python Discovery & Dependencies
+
+- [Detection Logic](detect.go): Auto-detection with version filtering, symlink dedup, PYTHONHOME inference
+- [macOS Detection](detect_darwin.go): Homebrew (arm64/amd64), python.org Framework, Xcode CLI Tools
+- [Linux Detection](detect_linux.go): /usr/lib, /usr/local/lib, multiarch support
+- [uv Integration](uv.go): WithUV(), WithUVProject(), Dependencies() — auto-install packages via uv
+- [venv Cache](uv_cache.go): Hash-based cached venvs in ~/.cache/pyffi/venvs/
+
+## Claude Agent SDK Wrapper (casdk)
+
+- [casdk README](casdk/README.md): Full API documentation for the Claude Agent SDK Go wrapper
+- [Client & Query](casdk/casdk.go): One-off queries with all ClaudeAgentOptions
+- [Session](casdk/session.go): Bidirectional conversations via ClaudeSDKClient
+- [Options](casdk/options.go): All QueryOption types — model, thinking, sandbox, MCP, hooks, agents, permissions, plugins, can_use_tool, SDK MCP servers
+- [Message Types](casdk/message.go): Message, TextBlock, ToolUseBlock, ThinkingBlock, ToolResultBlock, Usage, ContentBlock
+- [Hooks](casdk/hooks.go): Lifecycle event hooks — PreToolUse, PostToolUse, SessionStart, etc. Go handlers registered as Python async callbacks
+- [MCP](casdk/mcp.go): MCPTool, MCPServerConfig, SDKMCPServer, ToolAnnotations — external and in-process MCP server integration
+- [Errors](casdk/errors.go): ErrCLINotFound, ErrCLIConnection, ProcessError
+
+## Examples
+
+- [Sessions Example](examples/sessions/main.go): List Claude Code sessions and messages
+- [Query Example](examples/query/main.go): Send a query to Claude with options
+
+## Architecture
+
+- Auto-GIL: All public methods call autoGIL() which uses PyGILState_Ensure/Release. Nesting is safe.
+- Free-threaded Python: Detected via Py_GetVersion() containing "free-threading". Skips runtime.LockOSThread.
+- Reference counting: PyList_SetItem/PyTuple_SetItem steal refs. PyDict_SetItemString does NOT steal. PyList_GetItem returns borrowed refs.
+- Type detection: Cached type pointers (cachedBoolType, cachedIntType, etc.) compared via PyObject_Type. Bool checked before int (subclass).
+- purego binding: All C-API functions stored as function pointers on Runtime struct, registered via purego.RegisterLibFunc.
+
+## Code Generation (pyffi-gen)
+
+- [pyffi-gen Command](cmd/pyffi-gen/main.go): Generate type-safe Go bindings from Python modules
+- [Generator](internal/gen/generator.go): Core code generation logic
+- [Introspection](internal/gen/introspect.go): Python module introspection via pyffi Runtime
+- [Type Mapper](internal/gen/mapper.go): Python → Go type mapping rules
+- [Config](internal/gen/config.go): pyffi-gen.yaml configuration format
+- [Templates](internal/gen/templates/): Go code templates for modules, classes, enums, tests
+- Recommended pattern: generate into `internal/sdk/`, wrap with idiomatic public API. You can selectively wrap only what you need and mix generated bindings with inline Python code (rt.Exec/Eval) in the same package. See casdk as a practical example of this hybrid approach.
+
+## AgentSkills
+
+- [pyffi Skill](skills/pyffi/SKILL.md): AgentSkills-format guide for writing Go code with pyffi
+- [casdk Skill](casdk/skills/casdk/SKILL.md): AgentSkills-format guide for using the Claude Agent SDK from Go
+
+## Optional
+
+- [CI Configuration](.github/workflows/ci.yml): GitHub Actions for macOS and Linux × Python 3.12–3.14 via uv
+- [Makefile](Makefile): make ci (fmt + vet + build + test), make bench, make lint
+- [Benchmark Tests](benchmark_test.go): Performance benchmarks for Exec, Call, GetItem, Iter, Eval
+- [Docker Deployment](README.md): Multi-stage build examples with CGO_ENABLED=0

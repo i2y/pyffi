@@ -1,0 +1,2145 @@
+# pyffi — Full Documentation for LLMs
+
+> pyffi is a pure Go library that calls CPython via purego — no Cgo required.
+> Auto-GIL, full type conversion, async support, uv integration, free-threaded Python.
+
+---
+
+## README
+
+# pyffi
+
+Go bindings for CPython via [purego](https://github.com/ebitengine/purego) — **no Cgo required**.
+
+```go
+rt, _ := pyffi.New()
+defer rt.Close()
+
+rt.Exec(`x = 1 + 2`)
+result, _ := rt.Eval("x * 10")
+defer result.Close()
+fmt.Println(result.Int64()) // 30
+```
+
+## Features
+
+- **No Cgo** — pure Go, uses purego for FFI. `CGO_ENABLED=0` builds work
+- **Auto-GIL** — all methods are goroutine-safe out of the box
+- **Full type conversion** — bool, int, float, string, bytes, list, tuple, dict, set
+- **Async support** — `RunAsync`, `CallAsync`, `EventLoop` for asyncio integration
+- **Callbacks** — register Go functions callable from Python (with kwargs)
+- **Free-threaded Python** — automatic detection of Python 3.13t+ builds
+- **uv integration** — auto-detect, auto-install dependencies, project venv support
+- **Code generation** — `pyffi-gen` generates type-safe Go bindings from Python modules
+- **Platform support** — macOS and Linux (Windows is not yet supported)
+
+## Install
+
+```bash
+go get github.com/i2y/pyffi
+```
+
+Python 3.12+ is needed at runtime. pyffi auto-detects system Python, Homebrew, and [uv](https://github.com/astral-sh/uv)-managed installations. If Python is not installed:
+
+```bash
+# Recommended: install uv, then let pyffi auto-detect
+curl -LsSf https://astral.sh/uv/install.sh | sh
+uv python install 3.14
+```
+
+## Quick Start
+
+### Execute and Evaluate
+
+```go
+rt, _ := pyffi.New()
+defer rt.Close()
+
+// Execute statements
+rt.Exec(`
+def greet(name):
+    return f"Hello, {name}!"
+`)
+
+// Evaluate expressions
+result, _ := rt.Eval(`greet("World")`)
+defer result.Close()
+s, _ := result.GoString() // "Hello, World!"
+```
+
+### Import Modules
+
+```go
+math, _ := rt.Import("math")
+defer math.Close()
+
+pi := math.Attr("pi")
+defer pi.Close()
+f, _ := pi.Float64() // 3.141592653589793
+```
+
+### Collections
+
+```go
+// Create
+list, _ := rt.NewList(1, "two", 3.0)
+dict, _ := rt.NewDict("name", "Go", "year", 2009)
+tuple, _ := rt.NewTuple("a", "b", "c")
+set, _ := rt.NewSet(1, 2, 3)
+
+// Access
+item, _ := list.GetItem(0)      // list[0]
+list.SetItem(0, 99)             // list[0] = 99
+list.DelItem(0)                 // del list[0]
+ok, _ := list.Contains(2)       // 2 in list
+n, _ := list.Len()              // len(list)
+r, _ := list.Repr()             // repr(list)
+
+// Iterate
+iter, _ := list.Iter()
+defer iter.Close()
+for {
+    item, _ := iter.Next()
+    if item == nil { break }
+    defer item.Close()
+    // ...
+}
+
+// Compare
+eq, _ := a.Equals(b)            // a == b
+lt, _ := a.Compare(b, pyffi.PyLT)  // a < b
+```
+
+### Type Conversions
+
+| Go → Python | Python → Go |
+|---|---|
+| `bool` → `bool` | `bool` → `bool` |
+| `int`, `int8`–`int64` → `int` | `int` → `int64` |
+| `uint`, `uint8`–`uint64` → `int` | `float` → `float64` |
+| `float32`, `float64` → `float` | `str` → `string` |
+| `string` → `str` | `bytes`, `bytearray` → `[]byte` |
+| `[]byte` → `bytes` | `list`, `tuple`, `set` → `[]any` |
+| `[]any` → `list` | `dict` → `map[string]any` |
+| `map[string]any` → `dict` | `None` → `nil` |
+| `nil` → `None` | |
+
+Other Python types (functions, classes, instances, modules, etc.) are returned as `*Object` and can be manipulated via `Attr()`, `Call()`, `GetItem()`, etc:
+
+```go
+// Classes: Call() instantiates
+cls := mod.Attr("MyClass")
+defer cls.Close()
+instance, _ := cls.Call("arg1", 42)  // MyClass("arg1", 42)
+defer instance.Close()
+
+// Instance methods and attributes
+name, _ := instance.Attr("name").GoString()
+result, _ := instance.Attr("method").Call()
+defer result.Close()
+
+// Functions: first-class objects
+fn := mod.Attr("some_function")
+defer fn.Close()
+result, _ := fn.Call(args...)
+```
+
+### Goroutine Safety
+
+All methods automatically acquire the GIL. No manual management needed:
+
+```go
+var wg sync.WaitGroup
+for i := range 10 {
+    wg.Add(1)
+    go func(n int) {
+        defer wg.Done()
+        obj := rt.FromInt64(int64(n))
+        defer obj.Close()
+        // Safe from any goroutine
+    }(i)
+}
+wg.Wait()
+```
+
+For batching (reduces GIL overhead):
+
+```go
+rt.WithGIL(func() error {
+    rt.Exec("a = 1")
+    rt.Exec("b = 2")
+    rt.Exec("c = a + b")
+    return nil
+})
+```
+
+### Async Python
+
+```go
+// Synchronous
+result, _ := rt.RunAsync("fetch_data('https://example.com')")
+
+// Non-blocking (background goroutine)
+ch := rt.RunAsyncGo("fetch_data('https://example.com')")
+ar := <-ch // pyffi.AsyncResult{Value, Err}
+
+// Call async functions directly
+fn := mod.Attr("async_func")
+result, _ := fn.CallAsync(arg1, arg2)
+```
+
+### Callbacks
+
+```go
+rt.RegisterFunc("add", func(a, b int) int {
+    return a + b
+})
+
+// With keyword arguments
+rt.RegisterFunc("greet", func(name string, kw map[string]any) string {
+    greeting := "hello"
+    if g, ok := kw["greeting"]; ok {
+        greeting = g.(string)
+    }
+    return greeting + " " + name
+})
+
+rt.Exec(`
+import go_bridge
+print(go_bridge.add(1, 2))               # 3
+print(go_bridge.greet("Go", greeting="hi"))  # hi Go
+`)
+```
+
+### Context Managers
+
+```go
+rt.With(resource, func(value *pyffi.Object) error {
+    // __enter__ called, value is the result
+    // __exit__ called automatically (even on error)
+    return nil
+})
+```
+
+## Python & Dependency Management with uv
+
+pyffi integrates with [uv](https://github.com/astral-sh/uv) for Python discovery and dependency management. uv is a fast Python package manager written in Rust.
+
+### Auto-Detect uv-Managed Python
+
+```go
+// Prefer uv-managed Python installations
+rt, _ := pyffi.New(pyffi.WithUV())
+```
+
+### Inline Dependencies
+
+Automatically creates a hash-based cached venv in `~/.cache/pyffi/venvs/` and installs packages:
+
+```go
+rt, _ := pyffi.New(pyffi.Dependencies("numpy", "pandas", "requests"))
+defer rt.Close()
+
+rt.Exec(`
+import numpy as np
+import pandas as pd
+print(np.array([1, 2, 3]))
+`)
+```
+
+The venv is cached by a hash of the dependency list — subsequent runs skip installation.
+
+### Project venv (pyproject.toml)
+
+For projects with a `pyproject.toml`, use `WithUVProject` to run `uv sync` and use the project's venv:
+
+```go
+rt, _ := pyffi.New(pyffi.WithUVProject("/path/to/python-project"))
+defer rt.Close()
+
+// All project dependencies are available
+rt.Exec(`from mypackage import something`)
+```
+
+### Explicit Library Path
+
+Skip auto-detection entirely by pointing directly to the Python shared library:
+
+```go
+rt, _ := pyffi.New(pyffi.WithLibraryPath("/usr/lib/libpython3.14.so"))
+```
+
+This is useful in containers where the Python location is known at build time.
+
+## Docker Deployment
+
+pyffi works well in Docker with a multi-stage build. Since pyffi uses purego (no Cgo), the Go binary can be built with `CGO_ENABLED=0`:
+
+```dockerfile
+# Stage 1: Build Go binary (no Python needed)
+FROM golang:1.26 AS builder
+WORKDIR /app
+COPY go.mod go.sum ./
+RUN go mod download
+COPY . .
+RUN CGO_ENABLED=0 go build -o /app/myapp ./cmd/myapp
+
+# Stage 2: Runtime with Python
+FROM python:3.14-slim
+RUN pip install uv
+COPY --from=builder /app/myapp /usr/local/bin/myapp
+
+# Option A: Use pyproject.toml
+COPY pyproject.toml uv.lock ./
+RUN uv sync
+# In Go: pyffi.New(pyffi.WithUVProject("."))
+
+# Option B: Or let pyffi.Dependencies() install at first run
+# In Go: pyffi.New(pyffi.Dependencies("numpy", "pandas"))
+
+CMD ["myapp"]
+```
+
+### Optimized: No uv at Runtime
+
+For smaller images, install dependencies at build time and use `WithLibraryPath` to skip uv at runtime:
+
+```dockerfile
+FROM python:3.14-slim AS python-deps
+RUN pip install uv
+COPY pyproject.toml uv.lock ./
+RUN uv sync
+
+FROM python:3.14-slim
+COPY --from=python-deps /.venv /.venv
+COPY --from=builder /app/myapp /usr/local/bin/myapp
+# No uv needed at runtime
+# In Go: pyffi.New(pyffi.WithLibraryPath("/usr/local/lib/libpython3.14.so"))
+# Then add /.venv/lib/python3.14/site-packages to sys.path via Exec
+CMD ["myapp"]
+```
+
+## Code Generation
+
+`pyffi-gen` generates type-safe Go bindings from Python modules by introspecting them at build time:
+
+```bash
+# Install
+go install github.com/i2y/pyffi/cmd/pyffi-gen@latest
+
+# Generate bindings for a Python module
+pyffi-gen --module numpy --out ./gen/numpypkg --dependencies numpy
+
+# Preview without writing files
+pyffi-gen --module json --dry-run
+
+# Use a config file
+pyffi-gen --config pyffi-gen.yaml
+
+# Initialize a new project with config scaffolding
+pyffi-gen init --module numpy,pandas
+```
+
+The generated code provides a low-level typed `Module` wrapper. For production use, create a higher-level Go package that wraps the generated code with idiomatic APIs:
+
+```
+yourpkg/
+├── internal/sdk/       # Generated by pyffi-gen (DO NOT EDIT)
+│   └── sdk.go
+├── yourpkg.go          # Your idiomatic Go API wrapping internal/sdk
+├── options.go          # Option types
+└── ...
+```
+
+You don't need to wrap every generated function — pick and choose what to expose. You can also bypass the generated bindings entirely and use `rt.Exec()` / `rt.Eval()` with Python code strings for cases where that's simpler (e.g., constructing complex objects, passing callbacks, or calling functions with many optional parameters). Mixing both approaches in the same package is fine. The `casdk` package in this repository is a practical example — it uses the generated `internal/sdk/` for some operations (module import, simple method calls) while using inline Python code generation for others (option building, callback registration).
+
+## Claude Agent SDK Wrapper
+
+The `casdk` subpackage provides a Go-idiomatic wrapper around the [Claude Agent SDK](https://github.com/anthropics/claude-agent-sdk-python). It is an independent Go module:
+
+```bash
+go get github.com/i2y/pyffi/casdk
+```
+
+```go
+import "github.com/i2y/pyffi/casdk"
+
+client, _ := casdk.New()
+defer client.Close()
+
+// One-off query
+for msg, err := range client.Query(ctx, "What is 2+2?",
+    casdk.WithMaxTurns(1),
+) {
+    if err != nil { log.Fatal(err) }
+    defer msg.Close()
+    fmt.Println(msg.Text())
+}
+
+// List sessions (no API key needed)
+sessions, _ := client.ListSessions(casdk.WithLimit(5))
+
+// Interactive session (shares Runtime with client)
+session, _ := client.Session(casdk.WithModel("sonnet"))
+defer session.Close()
+session.Query("Hello!")
+for msg, _ := range session.ReceiveMessages() {
+    fmt.Println(msg.Text())
+}
+```
+
+Requires `ANTHROPIC_API_KEY` environment variable for queries.
+
+## For LLM Agents
+
+This project includes AgentSkills for AI coding assistants:
+
+- [`skills/pyffi/SKILL.md`](skills/pyffi/SKILL.md) — pyffi usage guide
+- [`casdk/skills/casdk/SKILL.md`](casdk/skills/casdk/SKILL.md) — casdk usage guide
+- [`llms.txt`](llms.txt) — LLM-friendly API index
+- [`llms-full.txt`](llms-full.txt) — Full documentation for LLM context
+
+## Build & Test
+
+```bash
+make ci          # fmt + vet + build + test
+make test        # verbose tests
+make bench       # benchmarks
+make lint        # staticcheck (if installed)
+```
+
+## License
+
+MIT
+
+---
+
+## Source: python.go
+
+```go
+// Package pyffi provides Go bindings for the CPython C-API using [purego].
+// No Cgo is required — the CPython shared library is loaded at runtime.
+//
+// # Quick Start
+//
+//	rt, err := pyffi.New()
+//	if err != nil {
+//	    log.Fatal(err)
+//	}
+//	defer rt.Close()
+//
+//	rt.Exec(`x = 1 + 2`)
+//	result, _ := rt.Eval("x * 10")
+//	defer result.Close()
+//	val, _ := result.Int64() // 30
+//
+// # Import and Call
+//
+//	math, _ := rt.Import("math")
+//	defer math.Close()
+//	r, _ := math.Attr("sqrt").Call(16.0)
+//	defer r.Close()
+//	f, _ := r.Float64() // 4.0
+//
+// # Collections
+//
+//	list, _ := rt.NewList(1, 2, 3)
+//	dict, _ := rt.NewDict("name", "Go", "year", 2009)
+//	tuple, _ := rt.NewTuple("a", "b", "c")
+//	set, _ := rt.NewSet(1, 2, 3)
+//
+//	item, _ := list.GetItem(0)      // list[0]
+//	list.SetItem(0, 99)             // list[0] = 99
+//	list.DelItem(0)                 // del list[0]
+//	ok, _ := list.Contains(2)       // 2 in list
+//	n, _ := list.Len()              // len(list)
+//
+// # Type Conversions
+//
+// The following Go ↔ Python type mappings are automatic:
+//
+//	Go type            Python type
+//	bool               bool
+//	int, int8–64       int
+//	uint, uint8–64     int
+//	float32, float64   float
+//	string             str
+//	[]byte             bytes
+//	[]any              list
+//	map[string]any     dict
+//	nil                None
+//
+// In the reverse direction:
+//
+//	Python type                Go type
+//	bool                       bool
+//	int                        int64
+//	float                      float64
+//	str                        string
+//	bytes, bytearray           []byte
+//	list, tuple, set           []any
+//	dict                       map[string]any
+//	None                       nil
+//
+// # Goroutine Safety (Auto-GIL)
+//
+// All public methods automatically acquire and release the Python GIL.
+// You can safely call any method from any goroutine without manual
+// GIL management:
+//
+//	go func() {
+//	    result, _ := rt.Eval("1 + 1")
+//	    defer result.Close()
+//	    // Safe — GIL is acquired automatically.
+//	}()
+//
+// For batching multiple operations under a single GIL acquisition
+// (reducing overhead), use [Runtime.WithGIL]:
+//
+//	rt.WithGIL(func() error {
+//	    rt.Exec("a = 1")
+//	    rt.Exec("b = 2")
+//	    rt.Exec("c = a + b")
+//	    return nil
+//	})
+//
+// # Async Python
+//
+//	result, _ := rt.RunAsync("some_async_func()")
+//	result, _ := rt.Eval("asyncio.run(coro)")
+//
+//	// Non-blocking (runs in a background goroutine):
+//	ch := rt.RunAsyncGo("fetch_data(url)")
+//	ar := <-ch // AsyncResult{Value, Err}
+//
+// # Callbacks (Go → Python → Go)
+//
+//	rt.RegisterFunc("add", func(a, b int) int { return a + b })
+//	rt.Exec(`
+//	    import go_bridge
+//	    result = go_bridge.add(1, 2)  // calls Go function
+//	`)
+//
+// # Free-Threaded Python
+//
+// Python 3.13t+ (free-threaded builds) are automatically detected.
+// When running on a free-threaded build, [runtime.LockOSThread] calls
+// are skipped since there is no GIL to contend for.
+//
+// [purego]: https://github.com/ebitengine/purego
+package pyffi
+// PyObject represents a CPython PyObject* as an opaque handle.
+// The zero value represents NULL.
+//
+// Deprecated: Use *Object instead for new code.
+type PyObject uintptr
+// IsNull reports whether the PyObject pointer is NULL.
+func (o PyObject) IsNull() bool { return o == 0 }
+// config holds resolved configuration for a Runtime.
+type config struct {
+// Option configures a Runtime.
+type Option func(*config)
+// WithLibraryPath sets an explicit path to the Python shared library,
+// bypassing auto-detection.
+func WithLibraryPath(path string) Option {
+// WithVersion constrains auto-detection to a specific Python major.minor.
+func WithVersion(major, minor int) Option {
+// Runtime holds a loaded CPython shared library and its bound C-API functions.
+// Only one Runtime should be active per process because Py_Initialize/Py_Finalize
+// operate on global state. For multi-goroutine usage, use WithGIL or GILEnsure.
+type Runtime struct {
+// New creates a new Python runtime. It loads the CPython shared library
+// and calls Py_Initialize.
+//
+// The caller must call Close when finished. Options can customize the
+// Python version or library path.
+func New(opts ...Option) (*Runtime, error) {
+// Close calls Py_Finalize and releases the library handle.
+// It is safe to call Close multiple times.
+//
+// WARNING: After Close, creating a new Runtime in the same process
+// may fail because CPython does not fully support Py_Finalize followed
+// by Py_Initialize. Design your application to use a single Runtime
+// for the process lifetime.
+func (r *Runtime) Close() error {
+// PythonVersion returns the Python version string (e.g. "3.13.2 (main, ...)").
+func (r *Runtime) PythonVersion() string {
+// PythonVersionInfo returns the major, minor, and micro version numbers.
+func (r *Runtime) PythonVersionInfo() (major, minor, micro int) {
+// With executes fn with the context manager obj, calling __enter__ before
+// and __exit__ after (even if fn returns an error).
+func (r *Runtime) With(obj *Object, fn func(value *Object) error) error {
+// Exec executes the given Python source code in the __main__ module.
+func (r *Runtime) Exec(code string) error {
+// Eval evaluates a Python expression and returns the result.
+func (r *Runtime) Eval(expr string) (*Object, error) {
+// RunAsync evaluates a Python expression that returns a coroutine and
+// executes it with asyncio.run(), returning the result.
+func (r *Runtime) RunAsync(expr string) (*Object, error) {
+// AsyncResult holds the result of an asynchronous Python operation.
+type AsyncResult struct {
+// RunAsyncGo runs the async expression in a background goroutine.
+// The caller's goroutine is not blocked. The GIL must have been released
+// via ReleaseGIL before calling this method.
+//
+// The returned Object (if any) must be accessed with the GIL held.
+func (r *Runtime) RunAsyncGo(expr string) <-chan AsyncResult {
+// ensureMainDict lazily initializes and returns __main__.__dict__.
+func (r *Runtime) ensureMainDict() uintptr {
+// ImportModule imports a Python module by name and returns it as a PyObject.
+// The caller receives a new reference.
+//
+// Deprecated: Use Import instead for new code.
+func (r *Runtime) ImportModule(name string) (PyObject, error) {
+// Import imports a Python module by name and returns it as an *Object.
+func (r *Runtime) Import(name string) (*Object, error) {
+// None returns a new reference to Python's None object.
+func (r *Runtime) None() *Object {
+// FromInt64 creates a Python int from a Go int64.
+func (r *Runtime) FromInt64(v int64) *Object {
+// FromFloat64 creates a Python float from a Go float64.
+func (r *Runtime) FromFloat64(v float64) *Object {
+// FromString creates a Python str from a Go string.
+func (r *Runtime) FromString(v string) *Object {
+// FromBool creates a Python bool from a Go bool.
+func (r *Runtime) FromBool(v bool) *Object {
+// FromGoValue creates a Python object from an arbitrary Go value.
+func (r *Runtime) FromGoValue(v any) (*Object, error) {
+// NewList creates a Python list from the given Go values.
+func (r *Runtime) NewList(items ...any) (*Object, error) {
+// NewTuple creates a Python tuple from the given Go values.
+func (r *Runtime) NewTuple(items ...any) (*Object, error) {
+// NewDict creates a Python dict from alternating key-value pairs.
+// Keys must be strings. Panics if an odd number of arguments is given.
+func (r *Runtime) NewDict(kvs ...any) (*Object, error) {
+// NewSet creates a Python set from the given Go values.
+func (r *Runtime) NewSet(items ...any) (*Object, error) {
+// bindFunctions binds all required CPython C-API functions via purego.
+func (r *Runtime) bindFunctions() (err error) {
+// cacheTypePointers caches Python built-in type pointers for fast type detection.
+func (r *Runtime) cacheTypePointers() {
+// bindRunStringFlags tries to bind PyRun_StringFlags for structured Exec error handling.
+// PyRun_String is a macro in CPython; the actual symbol is PyRun_StringFlags.
+func (r *Runtime) bindRunStringFlags() {
+// bindErrGetRaisedException tries to bind PyErr_GetRaisedException (Python 3.12+).
+// On older Python versions, these symbols don't exist and we fall back
+// to PyErr_Occurred + PyErr_Print for error extraction.
+func (r *Runtime) bindErrGetRaisedException() {
+func (r *Runtime) finalize() {
+```
+
+---
+
+## Source: object.go
+
+```go
+package pyffi
+// noCopy may be embedded into structs which must not be copied after first use.
+// See https://golang.org/issues/8005#issuecomment-190753527
+type noCopy struct{}
+func (*noCopy) Lock()   {}
+func (*noCopy) Unlock() {}
+// Object wraps a CPython PyObject* with explicit lifecycle management.
+// Call Close() to release the reference when done. A GC finalizer provides
+// a safety net, but explicit Close() is strongly recommended.
+//
+// The zero value and nil receiver are safe — all methods return ErrNilObject
+// or nil as appropriate.
+//
+// Objects are not safe for concurrent use from multiple goroutines.
+// Use [Runtime.WithGIL] to access Python objects from different goroutines.
+type Object struct {
+// newObject creates an Object that owns the given new reference.
+// Returns nil if ptr is 0 (NULL).
+func (r *Runtime) newObject(ptr uintptr) *Object {
+// Close releases the Python reference. It is safe to call multiple times
+// or on a nil receiver.
+func (o *Object) Close() error {
+// release is the GC finalizer. It acquires the GIL before calling DecRef
+// because finalizers run on an arbitrary goroutine/thread.
+func (o *Object) release() {
+// Ptr returns the raw PyObject* pointer.
+func (o *Object) Ptr() uintptr {
+// IsNone reports whether this object is Python's None.
+func (o *Object) IsNone() bool {
+// String returns the Python str() representation.
+func (o *Object) String() string {
+// Attr returns the named attribute. Returns nil if the attribute does not exist,
+// which allows chaining: obj.Attr("path").Attr("join").Call(...)
+// Use AttrErr if you need the error.
+func (o *Object) Attr(name string) *Object {
+// AttrErr returns the named attribute or an error.
+func (o *Object) AttrErr(name string) (*Object, error) {
+// SetAttr sets the named attribute to the given Go value.
+func (o *Object) SetAttr(name string, value any) error {
+// GetItem returns obj[key] using the Python __getitem__ protocol.
+func (o *Object) GetItem(key any) (*Object, error) {
+// DelItem deletes obj[key] using the Python __delitem__ protocol.
+func (o *Object) DelItem(key any) error {
+// Contains checks if item is in the object (equivalent to Python's "in" operator).
+func (o *Object) Contains(item any) (bool, error) {
+// Len returns the length of the object (equivalent to Python's len()).
+func (o *Object) Len() (int64, error) {
+// Python comparison operator constants for use with Compare.
+const (
+// Equals returns true if this object equals other (Python ==).
+func (o *Object) Equals(other *Object) (bool, error) {
+// Compare performs a rich comparison between this object and other.
+// Use PyLT, PyLE, PyEQ, PyNE, PyGT, PyGE as the op argument.
+func (o *Object) Compare(other *Object, op int) (bool, error) {
+// Iter returns an iterator over the object's elements.
+// The caller should call Next() in a loop until it returns nil, nil.
+func (o *Object) Iter() (*Iterator, error) {
+// Iterator wraps a Python iterator object.
+type Iterator struct {
+// Next returns the next item from the iterator.
+// Returns (nil, nil) when the iterator is exhausted.
+func (it *Iterator) Next() (*Object, error) {
+// Close releases the iterator.
+func (it *Iterator) Close() {
+// Enter calls __enter__ on the object (context manager protocol).
+func (o *Object) Enter() (*Object, error) {
+// Exit calls __exit__ on the object (context manager protocol).
+// If err is nil, None is passed for all three arguments.
+// If err is a *PythonError, the exception info is passed (as None values,
+// since reconstructing the original exception is not supported).
+func (o *Object) Exit(err error) error {
+// Repr returns the Python repr() of the object.
+func (o *Object) Repr() (string, error) {
+// SetItem sets obj[key] = value using the Python __setitem__ protocol.
+func (o *Object) SetItem(key, value any) error {
+// Call calls this object with the given arguments.
+// If the last argument is of type KW, it is used as keyword arguments.
+func (o *Object) Call(args ...any) (*Object, error) {
+// CallKw calls this object with positional and keyword arguments.
+func (o *Object) CallKw(args []any, kwargs map[string]any) (*Object, error) {
+// CallAsync calls an async Python function with the given arguments,
+// running the resulting coroutine with asyncio.run().
+func (o *Object) CallAsync(args ...any) (*Object, error) {
+// CallAsyncGo calls an async Python function in a background goroutine.
+// The caller's goroutine is not blocked. The GIL must have been released
+// via ReleaseGIL before calling this method.
+//
+// The returned Object (if any) must be accessed with the GIL held.
+func (o *Object) CallAsyncGo(args ...any) <-chan AsyncResult {
+// Int64 returns the Python int value as a Go int64.
+func (o *Object) Int64() (int64, error) {
+// Float64 returns the Python float value as a Go float64.
+func (o *Object) Float64() (float64, error) {
+// GoString returns the Python str value as a Go string.
+func (o *Object) GoString() (string, error) {
+// Bool returns the Python bool value as a Go bool.
+func (o *Object) Bool() (bool, error) {
+// GoBytes converts a Python bytes or bytearray to a Go []byte.
+func (o *Object) GoBytes() ([]byte, error) {
+// GoSlice converts a Python list to a Go []any.
+func (o *Object) GoSlice() ([]any, error) {
+// GoMap converts a Python dict to a Go map[string]any.
+func (o *Object) GoMap() (map[string]any, error) {
+// GoValue converts the Python object to the most appropriate Go type.
+func (o *Object) GoValue() (any, error) {
+```
+
+---
+
+## Source: gil.go
+
+```go
+package pyffi
+// gilGuard is returned by autoGIL. Call release() when done.
+type gilGuard struct {
+// autoGIL acquires the GIL for a public API method call.
+// PyGILState_Ensure supports nesting, so calling autoGIL from a method
+// that is called by another method with autoGIL is safe.
+func (r *Runtime) autoGIL() gilGuard {
+func (g *gilGuard) release() {
+// GILState represents a held GIL. It must be released by calling Release().
+type GILState struct {
+// Release releases the GIL and unlocks the OS thread.
+func (g *GILState) Release() {
+// GILEnsure acquires the GIL and locks the current goroutine to its OS thread.
+// The caller must call Release() when done.
+//
+// With auto-GIL, most users do not need to call this directly.
+// It is still useful for batching multiple operations under a single GIL acquisition.
+func (r *Runtime) GILEnsure() *GILState {
+// WithGIL acquires the GIL, calls fn, then releases the GIL.
+// The current goroutine is locked to its OS thread for the duration.
+//
+// With auto-GIL, most users do not need to call this directly.
+// It is still useful for batching multiple operations under a single GIL acquisition.
+func (r *Runtime) WithGIL(fn func() error) error {
+// ThreadState is the saved thread state from releasing the init GIL.
+type ThreadState struct {
+// Restore is a no-op. It is retained for backward compatibility.
+//
+// Deprecated: With auto-GIL, the init GIL is released automatically by New().
+// ReleaseGIL and Restore are no longer needed.
+func (ts *ThreadState) Restore() {
+// ReleaseGIL is a no-op that returns a dummy ThreadState.
+// It is retained for backward compatibility.
+//
+// Deprecated: With auto-GIL, the init GIL is released automatically by New().
+// All public methods acquire the GIL as needed.
+func (r *Runtime) ReleaseGIL() *ThreadState {
+```
+
+---
+
+## Source: convert.go
+
+```go
+package pyffi
+// goToPython converts a Go value to a new-reference PyObject*.
+// The caller owns the returned reference.
+func (r *Runtime) goToPython(v any) (uintptr, error) {
+func (r *Runtime) goSliceToPyList(items []any) (uintptr, error) {
+func (r *Runtime) goMapToPyDict(m map[string]any) (uintptr, error) {
+// pythonToGo converts a PyObject* (borrowed reference) to a Go value.
+// It does NOT consume the reference.
+func (r *Runtime) pythonToGo(ptr uintptr) (any, error) {
+func (r *Runtime) pyListToGoSlice(ptr uintptr) ([]any, error) {
+func (r *Runtime) pyDictToGoMap(ptr uintptr) (map[string]any, error) {
+func (r *Runtime) pyTupleToGoSlice(ptr uintptr) ([]any, error) {
+func (r *Runtime) pyIterableToGoSlice(ptr uintptr) ([]any, error) {
+func (r *Runtime) pyBytesToGoBytes(ptr uintptr) []byte {
+func (r *Runtime) pyBytearrayToGoBytes(ptr uintptr) []byte {
+```
+
+---
+
+## Source: errors.go
+
+```go
+package pyffi
+// ErrPythonNotFound is returned when no suitable Python shared library
+// can be located on the system.
+var ErrPythonNotFound = errors.New("pyffi: shared library not found")
+// ErrAlreadyClosed is returned when operations are attempted on a
+// closed Runtime.
+var ErrAlreadyClosed = errors.New("pyffi: runtime already closed")
+// ErrNilObject is returned when an operation is attempted on a nil Object.
+var ErrNilObject = errors.New("pyffi: operation on nil Object")
+// PythonError represents an error that originated in the Python interpreter.
+type PythonError struct {
+func (e *PythonError) Error() string {
+// LibraryNotFoundError provides detailed information about which paths
+// were searched when Python could not be found.
+type LibraryNotFoundError struct {
+func (e *LibraryNotFoundError) Error() string {
+func (e *LibraryNotFoundError) Unwrap() error {
+// currentError extracts the current Python exception info and returns a PythonError.
+// It clears the Python error indicator.
+func (r *Runtime) currentError(format string, args ...any) *PythonError {
+// extractFromException extracts Type, Message, and Traceback from an exception object.
+func (r *Runtime) extractFromException(pe *PythonError, exc uintptr) {
+// extractTraceback uses the traceback module to format the exception's traceback.
+// All failures are silently ignored (graceful degradation).
+func (r *Runtime) extractTraceback(pe *PythonError, exc uintptr) {
+// extractFromSysLast extracts error info from sys.last_value and sys.last_traceback.
+// These are set by PyErr_Print. Used as fallback for Python < 3.12.
+func (r *Runtime) extractFromSysLast(pe *PythonError) {
+// clearError silently clears the Python error indicator.
+func (r *Runtime) clearError() {
+```
+
+---
+
+## Source: callback.go
+
+```go
+package pyffi
+// callbackEntry holds a registered Go function.
+type callbackEntry struct {
+// RegisterFunc registers a Go function that can be called from Python.
+// The function is accessible via `import go_bridge; go_bridge.name(args)`.
+//
+// Supported function signatures:
+//   - func()
+//   - func(args...) result
+//   - func(args...) (result, error)
+//   - func(args...) error
+func (r *Runtime) RegisterFunc(name string, fn any) error {
+// ensureBridge creates the go_bridge module and the _dispatch PyCFunction once.
+func (r *Runtime) ensureBridge() error {
+// dispatchCallback is the C-level callback that dispatches to registered Go functions.
+// Signature matches PyCFunctionWithKeywords: (self, args, kwargs) -> result
+// The Python lambda calls: _dispatch(func_id, args_tuple, kwargs_dict)
+func (r *Runtime) dispatchCallback(self, args, kwargs uintptr) uintptr {
+// convertToType converts an any value to a reflect.Value of the target type.
+func convertToType(val any, target reflect.Type) reflect.Value {
+```
+
+---
+
+## Source: bind.go
+
+```go
+package pyffi
+// BoundModule wraps an imported Python module for convenient function calls.
+type BoundModule struct {
+// Bind imports a Python module and wraps it for dynamic function calls.
+func Bind(rt *Runtime, moduleName string) (*BoundModule, error) {
+// Call calls a named function on the module with positional arguments.
+// If the last argument is of type KW, it is used as keyword arguments.
+func (m *BoundModule) Call(name string, args ...any) (*Object, error) {
+// CallKw calls a named function with positional and keyword arguments.
+func (m *BoundModule) CallKw(name string, args []any, kwargs map[string]any) (*Object, error) {
+// Has reports whether the module has an attribute with the given name.
+func (m *BoundModule) Has(name string) bool {
+// Names returns the list of public attribute names on the module.
+func (m *BoundModule) Names() ([]string, error) {
+// Attr returns a named attribute from the module.
+func (m *BoundModule) Attr(name string) *Object {
+// Close releases the underlying module reference.
+func (m *BoundModule) Close() error {
+```
+
+---
+
+## Source: kw.go
+
+```go
+package pyffi
+// KW is a convenience type for keyword arguments.
+//
+//	obj.Call(data, pyffi.KW{"indent": 4})
+type KW = map[string]any
+```
+
+---
+
+## Source: eventloop.go
+
+```go
+package pyffi
+// EventLoop manages a persistent asyncio event loop running in a dedicated
+// goroutine. Coroutines can be submitted from any goroutine via Go or Submit,
+// and results are delivered through channels.
+//
+// The event loop goroutine holds the GIL while executing Python code, but
+// releases it during I/O waits, allowing other goroutines to acquire the GIL
+// for their own Python operations.
+type EventLoop struct {
+// StartEventLoop creates an asyncio event loop and runs it in a background
+// goroutine. The GIL must be held by the caller (i.e., do NOT call ReleaseGIL
+// before this).
+//
+// Call Stop to shut down the event loop when done.
+func (r *Runtime) StartEventLoop() (*EventLoop, error) {
+// run executes the event loop. Runs in a dedicated goroutine.
+func (el *EventLoop) run() {
+// onDone is the Go callback invoked when a submitted task completes.
+// Called from the event loop thread (with GIL held).
+func (el *EventLoop) onDone(taskID int, status string, errMsg string) {
+// Go submits a coroutine created by calling asyncFn(args...) to the event loop.
+// Returns a channel that receives the result when the coroutine completes.
+//
+// The caller must hold the GIL when calling this method (e.g., inside WithGIL).
+// The result Object in the channel must also be accessed with the GIL held.
+func (el *EventLoop) Go(asyncFn *Object, args ...any) (<-chan AsyncResult, error) {
+// Submit submits an existing coroutine object to the event loop.
+// The coroutine will be closed after submission.
+//
+// The caller must hold the GIL when calling this method.
+func (el *EventLoop) Submit(coro *Object) (<-chan AsyncResult, error) {
+func (el *EventLoop) removePending(id int64, ch chan AsyncResult) {
+// Stop signals the event loop to stop and waits for it to finish.
+func (el *EventLoop) Stop() error {
+```
+
+---
+
+## Source: detect.go
+
+```go
+package pyffi
+// candidate represents a found Python shared library on disk.
+type candidate struct {
+// detectLibrary returns the path to the best matching Python shared library.
+func detectLibrary(cfg config) (string, error) {
+func filterByVersion(cs []candidate, major, minor int) []candidate {
+func dedup(cs []candidate) []candidate {
+// parseVersion extracts major.minor from library filenames like
+// "libpython3.12.so" or "libpython3.12.dylib".
+func parseVersion(filename string) (major, minor int, ok bool) {
+// parseUVDirVersion parses the version from a uv directory name like
+// "cpython-3.14.2-macos-aarch64-none".
+func parseUVDirVersion(name string) (major, minor int, ok bool) {
+// libExtension returns the shared library file extension for the current OS.
+func libExtension() string {
+// inferPythonHome attempts to derive PYTHONHOME from the library path.
+// For a path like "/path/to/prefix/lib/libpython3.12.dylib",
+// the home is "/path/to/prefix".
+func inferPythonHome(libPath string) string {
+// detectUV scans ~/.local/share/uv/python/ for installed CPython versions.
+func detectUV() []candidate {
+```
+
+---
+
+## Source: uv.go
+
+```go
+package pyffi
+// WithUV configures the Runtime to prefer Python installations managed by uv.
+// If uv is not found, it falls back to normal detection without error.
+func WithUV() Option {
+// WithUVProject configures the Runtime to use a uv-managed project.
+// It reads pyproject.toml from projectDir, runs `uv sync`, and uses
+// the resulting .venv's Python with all declared dependencies available.
+func WithUVProject(projectDir string) Option {
+// Dependencies declares Python package dependencies inline.
+// A cached venv is created with the specified packages installed.
+// Requires uv to be installed.
+func Dependencies(deps ...string) Option {
+// UVAvailable reports whether the uv command is available on PATH.
+func UVAvailable() bool {
+// UVVersion returns the uv version string (e.g., "0.9.20").
+func UVVersion() (string, error) {
+// uvRun executes a uv subcommand and returns an error including stderr on failure.
+func uvRun(args ...string) error {
+// setupUVProject ensures the project's venv is up to date via `uv sync`.
+// Returns the venv directory path.
+func setupUVProject(projectDir string) (string, error) {
+// ensureDepsVenv creates or reuses a cached venv with the given dependencies.
+func ensureDepsVenv(deps []string, major, minor int) (string, error) {
+// venvPythonLibrary derives the libpython path from a venv's pyvenv.cfg.
+func venvPythonLibrary(venvDir string) (string, error) {
+// venvSitePackages returns the site-packages directory inside a venv.
+func venvSitePackages(venvDir string) (string, error) {
+// parsePyvenvCfg reads a pyvenv.cfg file into a key-value map.
+func parsePyvenvCfg(path string) (map[string]string, error) {
+// addSitePackages adds a directory to Python's sys.path.
+func (r *Runtime) addSitePackages(siteDir string) {
+// --- Level 1 functions (unchanged) ---
+// uvPythonEntry represents an entry from `uv python list --output json`.
+type uvPythonEntry struct {
+// detectUVCommand runs `uv python list --output json` and returns candidates.
+func detectUVCommand() []candidate {
+// parseVersionString parses a version string like "3.12.1" into (3, 12, true).
+func parseVersionString(v string) (major, minor int, ok bool) {
+// deriveLibPathFromExec derives the shared library path from a Python executable path.
+func deriveLibPathFromExec(execPath string, major, minor int) string {
+func fileExists(path string) bool {
+```
+
+---
+
+## Code Generation: cmd/pyffi-gen
+
+```go
+// pyffi-gen generates Go type-safe bindings from Python packages.
+//
+// Usage:
+//
+//	pyffi-gen --module json --out ./gen/jsonpkg
+//	pyffi-gen --config pyffi-gen.yaml
+//	pyffi-gen --module json --dry-run
+//	pyffi-gen init --module numpy,pandas --python ">=3.11"
+//	pyffi-gen sync
+package main
+func main() {
+func cmdGenerate(args []string) {
+func cmdInit(args []string) {
+func cmdSync() {
+func fatal(err error) {
+```
+
+---
+
+## Source: internal/gen/config.go
+
+```go
+package gen
+// Config represents the pyffi-gen.yaml configuration.
+type Config struct {
+// LoadConfig reads a YAML config file.
+func LoadConfig(path string) (*Config, error) {
+// Defaults fills in unset fields with sensible defaults.
+func (c *Config) Defaults() {
+// Validate checks for required fields.
+func (c *Config) Validate() error {
+```
+
+---
+
+## Source: internal/gen/generator.go
+
+```go
+package gen
+// Generator orchestrates code generation.
+type Generator struct {
+// NewGenerator creates a generator from config.
+func NewGenerator(cfg *Config) *Generator {
+// Generate runs the full pipeline: introspect → map → template → write.
+func (g *Generator) Generate() error {
+// DryRun prints what would be generated to stdout.
+func (g *Generator) DryRun() error {
+func (g *Generator) introspect() (*ModuleInfo, error) {
+func (g *Generator) render(info *ModuleInfo, mainTemplate string) ([]byte, error) {
+// zeroVal returns the zero value expression for a Go type.
+func zeroVal(goType string) string {
+// requiredParams generates the function parameter list.
+func requiredParams(params []ParamInfo, classNames map[string]bool) string {
+// callExpr generates the Call/CallKw expression for a function.
+func callExpr(params []ParamInfo) string {
+// resolveGoType returns a Go type string that is valid in generated code.
+// If the type is a pointer to a class generated in the same package, it is kept as-is.
+// Unknown pointer types are downgraded to "any".
+func resolveGoType(goType string, classNames map[string]bool) string {
+// returnConvert generates the return conversion + cleanup code.
+// For value types (int64, string, etc.), it defers Close and extracts.
+// For struct-wrapped types, ownership transfers to the struct (no Close).
+func returnConvert(t TypeInfo, classNames map[string]bool, receiver string) string {
+```
+
+---
+
+## Source: internal/gen/introspect.go
+
+```go
+package gen
+// Introspector runs Python to extract module metadata.
+type Introspector struct {
+const helperScript = `
+// NewIntrospector creates a Python runtime and loads helper functions.
+func NewIntrospector(opts ...pyffi.Option) (*Introspector, error) {
+// Close releases the Python runtime.
+func (i *Introspector) Close() error {
+// Introspect extracts metadata from the named Python module.
+func (i *Introspector) Introspect(moduleName string, include, exclude []string, mapper *Mapper) (*ModuleInfo, error) {
+func parseFuncInfo(name string, m map[string]any, mapper *Mapper) *FuncInfo {
+func parseClassInfo(name string, m map[string]any, mapper *Mapper) *ClassInfo {
+func parseEnumInfo(name string, m map[string]any) *EnumInfo {
+func matchFilter(name string, include, exclude []string) bool {
+func firstLine(s string) string {
+```
+
+---
+
+## Source: internal/gen/mapper.go
+
+```go
+package gen
+// Mapper converts Python type annotations to Go types.
+type Mapper struct {
+// NewMapper creates a mapper with optional type overrides.
+func NewMapper(overrides map[string]string) *Mapper {
+var baseTypes = map[string]string{
+// Map converts a Python annotation string to a TypeInfo.
+func (m *Mapper) Map(pyAnnotation string) TypeInfo {
+const maxMapDepth = 10
+func (m *Mapper) mapType(s string) TypeInfo {
+func (m *Mapper) mapTypeDepth(s string, depth int) TypeInfo {
+func isValidGoIdent(s string) bool {
+// unwrapGeneric extracts the inner part of "prefix[inner]".
+func unwrapGeneric(s, prefix string) (string, bool) {
+// splitTwo splits "K, V" at the top-level comma.
+func splitTwo(s string) (string, string) {
+// splitParams splits comma-separated type params respecting bracket nesting.
+func splitParams(s string) []string {
+// GoFuncName converts snake_case to PascalCase.
+// Also strips module prefixes (dots) and handles PascalCase input.
+func GoFuncName(pyName string) string {
+// Go reserved words that cannot be used as parameter names.
+var goReserved = map[string]string{
+// GoParamName converts snake_case to camelCase, escaping Go reserved words.
+func GoParamName(pyName string) string {
+```
+
+---
+
+## Source: internal/gen/types.go
+
+```go
+// Package gen implements Python module introspection and Go code generation.
+package gen
+// ModuleInfo holds the complete introspection result for a Python module.
+type ModuleInfo struct {
+// FuncInfo describes a Python function or method.
+type FuncInfo struct {
+// ParamInfo describes a function parameter.
+type ParamInfo struct {
+// TypeInfo describes a mapped type.
+type TypeInfo struct {
+// ClassInfo describes a Python class.
+type ClassInfo struct {
+// PropInfo describes a Python property.
+type PropInfo struct {
+// EnumInfo describes a Python Enum class.
+type EnumInfo struct {
+// EnumMember is a single enum value.
+type EnumMember struct {
+```
+
+---
+
+## casdk README
+
+# casdk
+
+Go wrapper for the [Claude Agent SDK](https://github.com/anthropics/claude-agent-sdk-python) — powered by [pyffi](https://github.com/i2y/pyffi).
+
+The SDK is auto-installed via uv on first use. No manual Python setup required beyond having Python 3.12+ available.
+
+## Install
+
+```bash
+go get github.com/i2y/pyffi/casdk
+```
+
+Set `ANTHROPIC_API_KEY` for queries:
+
+```bash
+export ANTHROPIC_API_KEY=sk-ant-...
+```
+
+## One-Off Query
+
+```go
+client, _ := casdk.New()
+defer client.Close()
+
+for msg, err := range client.Query(ctx, "Explain Go interfaces",
+    casdk.WithMaxTurns(1),
+    casdk.WithModel("sonnet"),
+) {
+    if err != nil { log.Fatal(err) }
+    defer msg.Close()
+
+    if msg.Type() == "assistant" {
+        for _, block := range msg.ContentBlocks() {
+            if tb, ok := block.(casdk.TextBlock); ok {
+                fmt.Println(tb.Text)
+            }
+        }
+    }
+    if msg.Type() == "result" {
+        fmt.Printf("Cost: $%.4f, Turns: %d\n", msg.TotalCostUSD(), msg.NumTurns())
+    }
+}
+```
+
+## Interactive Session
+
+Multi-turn conversations with context retained between queries. Use `client.Session()` to share the Runtime with the client (recommended), or `casdk.NewSession()` for a standalone session:
+
+```go
+client, _ := casdk.New()
+defer client.Close()
+
+// Create session from existing client (shares Runtime — recommended)
+session, _ := client.Session(
+    casdk.WithModel("sonnet"),
+    casdk.WithCwd("/path/to/project"),
+)
+defer session.Close()
+
+session.Query("What files are in this directory?")
+for msg, _ := range session.ReceiveMessages() {
+    defer msg.Close()
+    fmt.Println(msg.Text())
+}
+
+// Follow-up — context is retained
+session.Query("Now explain the main.go file")
+for msg, _ := range session.ReceiveMessages() {
+    defer msg.Close()
+    fmt.Println(msg.Text())
+}
+```
+
+## Session Management
+
+List and inspect past Claude Code sessions (no API key needed):
+
+```go
+client, _ := casdk.New()
+defer client.Close()
+
+sessions, _ := client.ListSessions(casdk.WithLimit(10))
+for _, s := range sessions {
+    fmt.Printf("%s  %s\n", s.SessionID[:8], s.Summary)
+}
+
+msgs, _ := client.GetSessionMessages(sessions[0].SessionID)
+for _, m := range msgs {
+    fmt.Printf("[%s] %s\n", m.Type, m.Content)
+}
+
+client.RenameSession(sessions[0].SessionID, "My Session")
+client.TagSession(sessions[0].SessionID, "important")
+```
+
+## Query Options
+
+```go
+casdk.WithModel("sonnet")                   // model selection
+casdk.WithSystemPrompt("Be concise")        // custom system prompt
+casdk.WithMaxTurns(5)                       // limit agentic turns
+casdk.WithMaxBudget(1.0)                    // USD budget cap
+casdk.WithPermissionMode("bypassPermissions") // permission mode
+casdk.WithCwd("/path/to/project")           // working directory
+casdk.WithAllowedTools("Read", "Bash")      // auto-approve tools
+casdk.WithDisallowedTools("Write")          // block tools
+casdk.WithResume("session-id")              // resume session
+casdk.WithCLIPath("/path/to/claude")        // custom CLI path
+casdk.WithThinking(casdk.ThinkingConfig{    // extended thinking
+    Type: "enabled", BudgetTokens: 10000,
+})
+casdk.WithSandbox(casdk.SandboxConfig{      // sandbox mode
+    Enabled: true,
+    AutoAllowBashIfSandboxed: true,
+})
+casdk.WithMCPServers(map[string]casdk.MCPServerConfig{
+    "myserver": {Command: "node", Args: []string{"server.js"}},
+})
+casdk.WithAgents(map[string]casdk.AgentDefinition{
+    "reviewer": {
+        Description: "Code reviewer",
+        Prompt:      "Review code quality...",
+        Tools:       []string{"Read", "Glob", "Grep"},
+    },
+})
+```
+
+## Plugins
+
+```go
+client.Query(ctx, "Hello",
+    casdk.WithPlugins(casdk.PluginConfig{Type: "local", Path: "/path/to/plugin"}),
+)
+```
+
+## Custom Tool Permissions
+
+```go
+client.Query(ctx, "Refactor main.go",
+    casdk.WithCanUseTool(func(toolName string, input map[string]any) casdk.PermissionResult {
+        if toolName == "Bash" {
+            return casdk.PermissionResult{Message: "Bash is not allowed"}
+        }
+        return casdk.PermissionResult{Allow: true}
+    }),
+)
+```
+
+## Hooks
+
+```go
+client.Query(ctx, "Fix the bug",
+    casdk.WithHooks(map[casdk.HookEvent][]casdk.HookMatcher{
+        casdk.HookPreToolUse: {
+            {
+                Matcher: "Bash",
+                Handler: func(input map[string]any) (map[string]any, error) {
+                    fmt.Println("About to run Bash:", input)
+                    return nil, nil
+                },
+            },
+        },
+    }),
+)
+```
+
+## In-Process MCP Servers
+
+```go
+client.Query(ctx, "What is 2+3?",
+    casdk.WithSDKMCPServers(casdk.SDKMCPServer{
+        Name: "calculator",
+        Tools: []casdk.MCPTool{
+            {
+                Name:        "add",
+                Description: "Add two numbers",
+                InputSchema: map[string]any{
+                    "type": "object",
+                    "properties": map[string]any{
+                        "a": map[string]any{"type": "number"},
+                        "b": map[string]any{"type": "number"},
+                    },
+                },
+                Handler: func(args map[string]any) (string, error) {
+                    a, _ := args["a"].(float64)
+                    b, _ := args["b"].(float64)
+                    return fmt.Sprintf("%g", a+b), nil
+                },
+            },
+        },
+    }),
+    casdk.WithAllowedTools("mcp__calculator__add"),
+)
+```
+
+## Message Types
+
+| Type | Description | Key Fields |
+|------|-------------|------------|
+| `"user"` | User input | `Text()` |
+| `"assistant"` | Claude's response | `Text()`, `Model()`, `ContentBlocks()` |
+| `"system"` | System events | `SessionID()` |
+| `"result"` | Final result | `Text()`, `IsError()`, `TotalCostUSD()`, `Usage()`, `NumTurns()`, `DurationMs()` |
+
+### Content Blocks
+
+Assistant messages contain typed content blocks:
+
+```go
+for _, block := range msg.ContentBlocks() {
+    switch b := block.(type) {
+    case casdk.TextBlock:
+        fmt.Println(b.Text)
+    case casdk.ToolUseBlock:
+        fmt.Printf("Tool: %s(%v)\n", b.Name, b.Input)
+    case casdk.ThinkingBlock:
+        fmt.Println("Thinking:", b.Thinking)
+    case casdk.ToolResultBlock:
+        fmt.Printf("Result: %s (error=%v)\n", b.Content, b.IsError)
+    }
+}
+```
+
+## For LLM Agents
+
+- [`skills/casdk/SKILL.md`](skills/casdk/SKILL.md) — AgentSkills-format usage guide for AI coding assistants
+
+---
+
+## Source: casdk/casdk.go
+
+```go
+// Package casdk provides a Go-idiomatic wrapper around the
+// [Claude Agent SDK] for building applications powered by Claude Code.
+//
+// The SDK is auto-installed via uv on first use. Set the ANTHROPIC_API_KEY
+// environment variable for authentication.
+//
+// # One-Off Queries
+//
+// Use [Client.Query] for single-turn interactions:
+//
+//	client, _ := casdk.New()
+//	defer client.Close()
+//
+//	for msg, err := range client.Query(ctx, "Explain Go interfaces",
+//	    casdk.WithMaxTurns(1),
+//	    casdk.WithModel("sonnet"),
+//	) {
+//	    if err != nil { log.Fatal(err) }
+//	    defer msg.Close()
+//	    if msg.Type() == "assistant" {
+//	        for _, block := range msg.ContentBlocks() {
+//	            if tb, ok := block.(casdk.TextBlock); ok {
+//	                fmt.Println(tb.Text)
+//	            }
+//	        }
+//	    }
+//	}
+//
+// # Interactive Sessions
+//
+// Use [NewSession] for multi-turn conversations:
+//
+//	session, _ := casdk.NewSession(casdk.WithModel("sonnet"))
+//	defer session.Close()
+//
+//	session.Query("What files are in this directory?")
+//	for msg, _ := range session.ReceiveMessages() {
+//	    defer msg.Close()
+//	    fmt.Println(msg.Text())
+//	}
+//
+//	session.Query("Now explain the main.go file")
+//	for msg, _ := range session.ReceiveMessages() {
+//	    defer msg.Close()
+//	    fmt.Println(msg.Text())
+//	}
+//
+// # Session Management
+//
+// List and inspect past Claude Code sessions (no API key needed):
+//
+//	sessions, _ := client.ListSessions(casdk.WithLimit(10))
+//	msgs, _ := client.GetSessionMessages(sessions[0].SessionID)
+//
+// # Configuration
+//
+// All [ClaudeAgentOptions] fields are exposed as [QueryOption] functions:
+// [WithModel], [WithSystemPrompt], [WithMaxTurns], [WithPermissionMode],
+// [WithAllowedTools], [WithThinking], [WithSandbox], [WithMCPServers],
+// [WithResume], [WithMaxBudget], and more.
+//
+// [Claude Agent SDK]: https://github.com/anthropics/claude-agent-sdk-python
+package casdk
+// Client wraps the Claude Agent SDK for one-off queries and session management.
+type Client struct {
+// New creates a new Claude Agent SDK client.
+// The SDK is auto-installed via uv if not present.
+// Set ANTHROPIC_API_KEY environment variable for authentication.
+func New() (*Client, error) {
+// Close releases all resources.
+func (c *Client) Close() error {
+// Runtime returns the underlying pyffi Runtime for advanced use.
+func (c *Client) Runtime() *pyffi.Runtime {
+// Query sends a prompt to Claude and returns an iterator over response messages.
+// The caller must close each Message after use.
+//
+//	for msg, err := range client.Query(ctx, "Hello") {
+//	    if err != nil { log.Fatal(err) }
+//	    defer msg.Close()
+//	    fmt.Println(msg.Text())
+//	}
+func (c *Client) Query(ctx context.Context, prompt string, opts ...QueryOption) iter.Seq2[*Message, error] {
+// buildOptionsCode generates Python code to construct ClaudeAgentOptions.
+func (c *Client) buildOptionsCode(cfg queryConfig) (string, error) {
+func pythonBool(v bool) string {
+// --- Sessions ---
+// SessionInfo represents metadata about a Claude Code session.
+type SessionInfo struct {
+// ListSessions returns metadata for recent Claude Code sessions.
+func (c *Client) ListSessions(opts ...ListSessionsOption) ([]SessionInfo, error) {
+// ListSessionsOption configures ListSessions.
+type ListSessionsOption func(*listSessionsConfig)
+type listSessionsConfig struct {
+// WithLimit limits the number of sessions returned.
+func WithLimit(n int) ListSessionsOption {
+// WithDirectory sets the project directory to search for sessions.
+func WithDirectory(dir string) ListSessionsOption {
+// SessionMessage represents a message within a session.
+type SessionMessage struct {
+// GetSessionMessages returns messages for a given session.
+func (c *Client) GetSessionMessages(sessionID string, opts ...GetMessagesOption) ([]SessionMessage, error) {
+// GetMessagesOption configures GetSessionMessages.
+type GetMessagesOption func(*getMessagesConfig)
+type getMessagesConfig struct {
+// WithMessageLimit limits the number of messages returned.
+func WithMessageLimit(n int) GetMessagesOption {
+// WithOffset sets the message offset.
+func WithOffset(n int) GetMessagesOption {
+// RenameSession renames a session.
+func (c *Client) RenameSession(sessionID, title string) error {
+// TagSession tags or untags a session. Pass "" to clear the tag.
+func (c *Client) TagSession(sessionID, tag string) error {
+```
+
+---
+
+## Source: casdk/options.go
+
+```go
+package casdk
+// QueryOption configures a Query or Session call.
+type QueryOption func(*queryConfig)
+type queryConfig struct {
+// WithModel sets the model (e.g. "sonnet", "opus", "haiku", "claude-sonnet-4-5-20250514").
+func WithModel(model string) QueryOption {
+// WithSystemPrompt sets a custom system prompt.
+func WithSystemPrompt(prompt string) QueryOption {
+// WithMaxTurns limits the number of agentic turns.
+func WithMaxTurns(n int) QueryOption {
+// WithPermissionMode sets the permission mode.
+// Valid values: "default", "acceptEdits", "plan", "bypassPermissions".
+func WithPermissionMode(mode string) QueryOption {
+// WithCwd sets the working directory for the agent.
+func WithCwd(dir string) QueryOption {
+// WithAllowedTools sets tools that are auto-approved without prompting.
+func WithAllowedTools(tools ...string) QueryOption {
+// WithDisallowedTools sets tools that are blocked.
+func WithDisallowedTools(tools ...string) QueryOption {
+// WithMaxBudget sets the max budget in USD.
+func WithMaxBudget(usd float64) QueryOption {
+// WithResume resumes an existing session by ID.
+func WithResume(sessionID string) QueryOption {
+// WithThinking configures extended thinking.
+func WithThinking(config ThinkingConfig) QueryOption {
+// WithSandbox configures sandbox settings.
+func WithSandbox(config SandboxConfig) QueryOption {
+// WithMCPServers configures MCP server connections.
+func WithMCPServers(servers map[string]MCPServerConfig) QueryOption {
+// WithAgents defines custom subagents.
+func WithAgents(agents map[string]AgentDefinition) QueryOption {
+// WithHooks sets lifecycle event hooks.
+func WithHooks(hooks map[HookEvent][]HookMatcher) QueryOption {
+// WithCanUseTool sets a custom tool permission callback.
+func WithCanUseTool(fn CanUseToolFunc) QueryOption {
+// WithIncludePartialMessages enables streaming partial message updates.
+func WithIncludePartialMessages(v bool) QueryOption {
+// WithEnableFileCheckpointing enables file change tracking.
+func WithEnableFileCheckpointing(v bool) QueryOption {
+// WithSettingSources loads settings from the given sources ("user", "project", "local").
+func WithSettingSources(sources ...string) QueryOption {
+// WithCLIPath sets the path to the Claude Code CLI binary.
+func WithCLIPath(path string) QueryOption {
+// ThinkingConfig configures extended thinking.
+type ThinkingConfig struct {
+// SandboxConfig configures sandbox settings.
+type SandboxConfig struct {
+// NetworkConfig configures network access within the sandbox.
+type NetworkConfig struct {
+// MCPServerConfig configures an MCP server connection.
+type MCPServerConfig struct {
+// AgentDefinition defines a custom subagent.
+type AgentDefinition struct {
+// CanUseToolFunc is a callback for custom tool permission decisions.
+type CanUseToolFunc func(toolName string, input map[string]any) PermissionResult
+// PermissionResult is returned by CanUseToolFunc.
+type PermissionResult struct {
+```
+
+---
+
+## Source: casdk/message.go
+
+```go
+package casdk
+// Message represents a message from the Claude Agent SDK.
+type Message struct {
+// Type returns the message type: "user", "assistant", "system", "result".
+func (m *Message) Type() string { return m.typ }
+// Text returns the text content of the message.
+func (m *Message) Text() string { return m.text }
+// Model returns the model name (for assistant messages).
+func (m *Message) Model() string { return m.model }
+// SessionID returns the session ID (for system and result messages).
+func (m *Message) SessionID() string { return m.sessionID }
+// IsError returns whether the result is an error (for result messages).
+func (m *Message) IsError() bool { return m.isError }
+// DurationMs returns the duration in milliseconds (for result messages).
+func (m *Message) DurationMs() int { return m.duration }
+// NumTurns returns the number of agentic turns (for result messages).
+func (m *Message) NumTurns() int { return m.numTurns }
+// TotalCostUSD returns the total cost in USD (for result messages).
+func (m *Message) TotalCostUSD() float64 { return m.costUSD }
+// Usage returns token usage information (for result messages).
+func (m *Message) Usage() *Usage { return m.usage }
+// ContentBlocks returns the content blocks (for assistant messages).
+func (m *Message) ContentBlocks() []ContentBlock { return m.blocks }
+// Raw returns the underlying Python object for advanced access.
+func (m *Message) Raw() *pyffi.Object { return m.obj }
+// Close releases the underlying Python object.
+func (m *Message) Close() error {
+// Usage holds token usage information.
+type Usage struct {
+// ContentBlock is an interface for message content blocks.
+type ContentBlock interface {
+// TextBlock represents a text content block.
+type TextBlock struct {
+func (TextBlock) contentBlock() {}
+// ToolUseBlock represents a tool use content block.
+type ToolUseBlock struct {
+func (ToolUseBlock) contentBlock() {}
+// ToolResultBlock represents a tool result content block.
+type ToolResultBlock struct {
+func (ToolResultBlock) contentBlock() {}
+// ThinkingBlock represents an extended thinking content block.
+type ThinkingBlock struct {
+func (ThinkingBlock) contentBlock() {}
+// extractMessage extracts a Go Message from a Python message object.
+func extractMessage(obj *pyffi.Object) *Message {
+func extractAssistantFields(obj *pyffi.Object, msg *Message) {
+func extractSystemFields(obj *pyffi.Object, msg *Message) {
+func extractResultFields(obj *pyffi.Object, msg *Message) {
+func extractUsage(obj *pyffi.Object) *Usage {
+func extractContentBlocks(obj *pyffi.Object) []ContentBlock {
+func extractText(obj *pyffi.Object) string {
+```
+
+---
+
+## Source: casdk/session.go
+
+```go
+package casdk
+// Session wraps the Python ClaudeSDKClient for bidirectional conversations.
+// Create with NewSession, use Query/ReceiveMessages for interaction, and
+// Close when done.
+type Session struct {
+// NewSession creates a new interactive session with the Claude Agent SDK.
+// The SDK is auto-installed via uv if not present.
+func NewSession(opts ...QueryOption) (*Session, error) {
+// Session creates a new interactive session using the client's existing Runtime.
+func (c *Client) Session(opts ...QueryOption) (*Session, error) {
+func newSession(rt *pyffi.Runtime, ownsRT bool, opts ...QueryOption) (*Session, error) {
+// Connect establishes the connection with an optional initial prompt.
+func (s *Session) Connect(prompt string) error {
+// Query sends a prompt to the session.
+func (s *Session) Query(prompt string) error {
+// ReceiveMessages returns an iterator over response messages from the session.
+func (s *Session) ReceiveMessages() iter.Seq2[*Message, error] {
+// Interrupt interrupts the current operation.
+func (s *Session) Interrupt() error {
+// SetModel changes the model mid-session.
+func (s *Session) SetModel(model string) error {
+// SetPermissionMode changes the permission mode mid-session.
+func (s *Session) SetPermissionMode(mode string) error {
+// Close disconnects the session and releases resources.
+func (s *Session) Close() error {
+const sessionWrapperCode = `
+```
+
+---
+
+## Source: casdk/hooks.go
+
+```go
+package casdk
+// HookEvent represents a lifecycle event type.
+type HookEvent string
+const (
+// HookMatcher matches hook events and dispatches to a handler.
+type HookMatcher struct {
+```
+
+---
+
+## Source: casdk/mcp.go
+
+```go
+package casdk
+// MCPTool defines a tool for an in-process MCP server.
+type MCPTool struct {
+// MCPServerStatus represents the status of an MCP server.
+type MCPServerStatus struct {
+```
+
+---
+
+## Source: casdk/errors.go
+
+```go
+package casdk
+var (
+// ProcessError is returned when the Claude Code process exits with an error.
+type ProcessError struct {
+func (e *ProcessError) Error() string {
+```
+
+---
+
+## AgentSkills
+
+### pyffi Skill
+
+---
+name: pyffi
+description: "Guide for writing Go code that calls Python using the pyffi library (CPython bindings via purego, no Cgo). Use this skill when writing Go code that interacts with Python, importing Python modules from Go, using the casdk (Claude Agent SDK) wrapper, or working with pyffi APIs like Runtime, Object, Exec, Eval, Import, type conversions, async patterns, callbacks, or GIL management. Also use when the user mentions purego + Python, embedding Python in Go, Go-Python FFI, or uv dependency management for Python packages from Go."
+license: MIT
+compatibility: "Requires Python 3.12+ shared library at runtime. macOS and Linux supported."
+metadata:
+  author: Yasushi Itoh
+  version: "1.0"
+---
+
+# pyffi Development Guide
+
+pyffi is a pure Go library that calls CPython via purego — no Cgo required. All methods are goroutine-safe thanks to automatic GIL management.
+
+For the full API index, read `llms.txt` at the project root. For detailed signatures, read `llms-full.txt`.
+
+## Basic Usage
+
+```go
+rt, err := pyffi.New()
+if err != nil { log.Fatal(err) }
+defer rt.Close()
+
+rt.Exec(`x = 1 + 2`)                    // execute statements
+result, _ := rt.Eval("x * 10")          // evaluate expressions → *Object
+defer result.Close()                      // ALWAYS close Objects
+val, _ := result.Int64()                 // extract Go value
+```
+
+## Critical Rules
+
+1. **Always `defer obj.Close()`** on every `*Object` returned by pyffi. Forgetting this leaks Python references.
+
+2. **Auto-GIL** — all public methods automatically acquire and release the Python GIL. Users never need `WithGIL` for correctness. Any goroutine can safely call pyffi methods directly. `WithGIL` is only useful for batching multiple operations to reduce per-call overhead.
+
+3. **Type conversions are automatic** in both directions:
+   - Go → Python: bool, int (all sizes), uint (all sizes including uint64), float, string, []byte, []any, map[string]any, nil
+   - Python → Go: bool→bool, int→int64, float→float64, str→string, bytes/bytearray→[]byte, list/tuple/set→[]any, dict→map[string]any, None→nil
+
+4. **Error handling**: Python exceptions become `*PythonError` with Type, Message, and Traceback (3.12+). Use `errors.As(err, &pyErr)` to extract details.
+
+## Import and Call
+
+```go
+math, _ := rt.Import("math")
+defer math.Close()
+r, _ := math.Attr("sqrt").Call(16.0)  // chaining works — Attr returns nil on missing
+defer r.Close()
+f, _ := r.Float64()  // 4.0
+```
+
+## Collections
+
+```go
+list, _ := rt.NewList(1, "two", 3.0)
+dict, _ := rt.NewDict("key", "value", "num", 42)  // alternating key-value pairs
+tuple, _ := rt.NewTuple("a", "b")
+set, _ := rt.NewSet(1, 2, 3)
+
+item, _ := list.GetItem(0)       // list[0]
+list.SetItem(0, 99)              // list[0] = 99
+list.DelItem(0)                  // del list[0]
+ok, _ := list.Contains(2)        // 2 in list
+n, _ := list.Len()               // len(list)
+repr, _ := list.Repr()           // repr(list)
+```
+
+## Iteration
+
+```go
+iter, _ := list.Iter()
+defer iter.Close()
+for {
+    item, _ := iter.Next()
+    if item == nil { break }  // nil means StopIteration
+    defer item.Close()
+}
+```
+
+## Keyword Arguments
+
+```go
+result, _ := fn.Call(arg1, arg2, pyffi.KW{"indent": 4, "sort_keys": true})
+```
+
+## Callbacks (Go → Python → Go)
+
+```go
+rt.RegisterFunc("add", func(a, b int) int { return a + b })
+
+// With kwargs: last param must be map[string]any
+rt.RegisterFunc("greet", func(name string, kw map[string]any) string {
+    greeting := "hello"
+    if g, ok := kw["greeting"]; ok {
+        greeting = g.(string)
+    }
+    return greeting + " " + name
+})
+
+rt.Exec(`
+import go_bridge
+result = go_bridge.add(1, 2)
+go_bridge.greet("Go", greeting="hi")
+`)
+```
+
+## Async
+
+```go
+result, _ := rt.RunAsync("some_async_func()")      // synchronous wait
+ch := rt.RunAsyncGo("fetch_data(url)")              // non-blocking
+ar := <-ch  // pyffi.AsyncResult{Value, Err}
+
+fn := mod.Attr("async_func")
+result, _ := fn.CallAsync(arg1)                     // call async function
+```
+
+## Auto-Install Dependencies via uv
+
+```go
+rt, _ := pyffi.New(pyffi.Dependencies("numpy", "pandas"))  // auto-install
+rt, _ := pyffi.New(pyffi.WithUVProject("/path/to/project")) // use pyproject.toml
+```
+
+## Context Managers
+
+```go
+rt.With(resource, func(value *pyffi.Object) error {
+    // __enter__ called, __exit__ called automatically
+    return nil
+})
+```
+
+## Comparison
+
+```go
+eq, _ := a.Equals(b)                    // a == b
+lt, _ := a.Compare(b, pyffi.PyLT)       // a < b
+// Constants: PyLT, PyLE, PyEQ, PyNE, PyGT, PyGE
+```
+
+## casdk (Claude Agent SDK Wrapper)
+
+For full casdk API, read `casdk/README.md`.
+
+```go
+import "github.com/i2y/pyffi/casdk"
+
+// One-off query (needs ANTHROPIC_API_KEY)
+client, _ := casdk.New()
+defer client.Close()
+for msg, err := range client.Query(ctx, "prompt", casdk.WithMaxTurns(1)) {
+    if err != nil { break }
+    defer msg.Close()
+    fmt.Println(msg.Text())
+}
+
+// Interactive session (shares Runtime with client)
+session, _ := client.Session(casdk.WithModel("sonnet"))
+defer session.Close()
+session.Query("Hello!")
+for msg, _ := range session.ReceiveMessages() { ... }
+
+// Session management (no API key needed)
+sessions, _ := client.ListSessions(casdk.WithLimit(10))
+msgs, _ := client.GetSessionMessages(sessions[0].SessionID)
+```
+
+## Code Generation (pyffi-gen)
+
+Generate type-safe Go bindings from Python modules:
+
+```bash
+# Install
+go install github.com/i2y/pyffi/cmd/pyffi-gen@latest
+
+# Generate bindings
+pyffi-gen --module numpy --out ./gen/numpypkg --dependencies numpy
+
+# Preview without writing
+pyffi-gen --module json --dry-run
+
+# Config file
+pyffi-gen --config pyffi-gen.yaml
+```
+
+The generated code provides a low-level typed `Module` wrapper. For production use, wrap it with an idiomatic public API:
+
+```
+yourpkg/
+├── internal/sdk/   # Generated by pyffi-gen (DO NOT EDIT)
+│   └── sdk.go
+├── yourpkg.go      # Your idiomatic Go API wrapping internal/sdk
+└── options.go
+```
+
+You don't need to wrap every generated function. You can also bypass the generated bindings and use `rt.Exec()`/`rt.Eval()` with Python code strings when that's simpler (e.g., complex objects, callbacks, many optional params). Mixing both approaches is fine. The `casdk` package demonstrates this — it uses generated bindings for some operations while using inline Python code generation for others.
+
+## Common Mistakes
+
+- Forgetting `defer obj.Close()` — every *Object must be closed
+- Using `asyncio.run()` directly in Exec — use `rt.RunAsync()` instead
+- Assuming `Attr()` returns error — it returns nil on missing (use `AttrErr()` for errors)
+- Using `[]string` or `[]int` — pyffi only converts `[]any`
+- Using `ReleaseGIL`/`WithGIL` for basic operations — auto-GIL handles this automatically
+
+## Architecture
+
+- **No Cgo**: purego loads libpython dynamically. `CGO_ENABLED=0` builds work.
+- **Auto-GIL**: Every public method calls `autoGIL()` internally. PyGILState_Ensure nesting is safe.
+- **Free-threaded Python**: 3.13t+ auto-detected, skips LockOSThread.
+- **Platform**: macOS and Linux. Windows not yet supported.
+
+---
+
+### casdk Skill
+
+---
+name: casdk
+description: "Guide for writing Go code using casdk, a Go wrapper for the Claude Agent SDK. Use this skill when building Go applications that interact with Claude Code — sending queries, managing sessions, listing past conversations, or using Claude as an agentic coding assistant from Go. Also use when the user mentions Claude Agent SDK from Go, claude-agent-sdk Go bindings, Go + Claude Code automation, or programmatic Claude Code access."
+license: MIT
+compatibility: "Requires Python 3.12+ and ANTHROPIC_API_KEY for queries. The SDK is auto-installed via uv on first use."
+metadata:
+  author: Yasushi Itoh
+  version: "1.0"
+---
+
+# casdk — Claude Agent SDK for Go
+
+casdk is a Go wrapper around the Claude Agent SDK, powered by pyffi (Go → Python via purego, no Cgo). The Python SDK is auto-installed via uv on first use.
+
+For full API reference, read `README.md` in the casdk package root.
+
+## Setup
+
+```go
+import "github.com/i2y/pyffi/casdk"
+```
+
+Set `ANTHROPIC_API_KEY` for queries. Session listing does not require an API key.
+
+## One-Off Query
+
+```go
+client, _ := casdk.New()
+defer client.Close()
+
+for msg, err := range client.Query(ctx, "Explain Go interfaces",
+    casdk.WithMaxTurns(1),
+    casdk.WithModel("sonnet"),
+) {
+    if err != nil { log.Fatal(err) }
+    defer msg.Close()
+
+    switch msg.Type() {
+    case "assistant":
+        for _, block := range msg.ContentBlocks() {
+            if tb, ok := block.(casdk.TextBlock); ok {
+                fmt.Println(tb.Text)
+            }
+        }
+    case "result":
+        fmt.Printf("Cost: $%.4f, Turns: %d\n", msg.TotalCostUSD(), msg.NumTurns())
+    }
+}
+```
+
+## Interactive Session
+
+Multi-turn conversations with retained context. Use `client.Session()` to share the Runtime (recommended):
+
+```go
+client, _ := casdk.New()
+defer client.Close()
+
+session, _ := client.Session(
+    casdk.WithModel("sonnet"),
+    casdk.WithCwd("/path/to/project"),
+)
+defer session.Close()
+
+session.Query("What files are in this directory?")
+for msg, _ := range session.ReceiveMessages() {
+    defer msg.Close()
+    fmt.Println(msg.Text())
+}
+
+session.Query("Now explain the main.go file")
+for msg, _ := range session.ReceiveMessages() {
+    defer msg.Close()
+    fmt.Println(msg.Text())
+}
+```
+
+## Session Management (No API Key Needed)
+
+```go
+client, _ := casdk.New()
+defer client.Close()
+
+// List sessions
+sessions, _ := client.ListSessions(casdk.WithLimit(10))
+for _, s := range sessions {
+    fmt.Printf("%s  %s\n", s.SessionID[:8], s.Summary)
+}
+
+// Get messages
+msgs, _ := client.GetSessionMessages(sessions[0].SessionID)
+for _, m := range msgs {
+    fmt.Printf("[%s] %s\n", m.Type, m.Content)
+}
+
+// Manage
+client.RenameSession(sessions[0].SessionID, "My Session")
+client.TagSession(sessions[0].SessionID, "important")
+```
+
+## All Query Options
+
+```go
+casdk.WithModel("sonnet")                    // model selection
+casdk.WithSystemPrompt("Be concise")         // custom system prompt
+casdk.WithMaxTurns(5)                        // limit agentic turns
+casdk.WithMaxBudget(1.0)                     // USD budget cap
+casdk.WithPermissionMode("bypassPermissions") // "default", "acceptEdits", "plan", "bypassPermissions"
+casdk.WithCwd("/path/to/project")            // working directory
+casdk.WithAllowedTools("Read", "Bash")       // auto-approve tools
+casdk.WithDisallowedTools("Write")           // block tools
+casdk.WithResume("session-id")               // resume existing session
+casdk.WithCLIPath("/path/to/claude")         // custom CLI path
+casdk.WithIncludePartialMessages(true)       // streaming partial updates
+casdk.WithEnableFileCheckpointing(true)      // file change tracking
+casdk.WithSettingSources("user", "project")  // load settings from sources
+casdk.WithThinking(casdk.ThinkingConfig{     // extended thinking
+    Type: "enabled", BudgetTokens: 10000,
+})
+casdk.WithSandbox(casdk.SandboxConfig{       // sandbox mode
+    Enabled: true,
+    AutoAllowBashIfSandboxed: true,
+})
+casdk.WithMCPServers(map[string]casdk.MCPServerConfig{
+    "myserver": {Command: "node", Args: []string{"server.js"}},
+})
+casdk.WithAgents(map[string]casdk.AgentDefinition{
+    "reviewer": {
+        Description: "Code reviewer",
+        Prompt:      "Review code quality...",
+        Tools:       []string{"Read", "Glob", "Grep"},
+    },
+})
+casdk.WithPlugins(casdk.PluginConfig{           // local SDK plugins
+    Type: "local", Path: "/path/to/plugin",
+})
+casdk.WithCanUseTool(func(toolName string,      // custom tool permissions
+    input map[string]any) casdk.PermissionResult {
+    return casdk.PermissionResult{Allow: true}
+})
+casdk.WithHooks(map[casdk.HookEvent][]casdk.HookMatcher{ // lifecycle hooks
+    casdk.HookPreToolUse: {{
+        Matcher: "Bash",
+        Handler: func(input map[string]any) (map[string]any, error) {
+            return nil, nil
+        },
+    }},
+})
+casdk.WithSDKMCPServers(casdk.SDKMCPServer{     // in-process MCP servers
+    Name: "myserver",
+    Tools: []casdk.MCPTool{{
+        Name: "greet", Description: "Say hello",
+        InputSchema: map[string]any{"type": "object",
+            "properties": map[string]any{"name": map[string]any{"type": "string"}}},
+        Handler: func(args map[string]any) (string, error) {
+            return fmt.Sprintf("Hello, %s!", args["name"]), nil
+        },
+    }},
+})
+```
+
+## Message Types
+
+| Type | Description | Key Methods |
+|------|-------------|-------------|
+| `"user"` | User input | `Text()` |
+| `"assistant"` | Claude's response | `Text()`, `Model()`, `ContentBlocks()` |
+| `"system"` | System events | `SessionID()` |
+| `"result"` | Final result | `Text()`, `IsError()`, `TotalCostUSD()`, `Usage()`, `NumTurns()`, `DurationMs()` |
+
+## Content Blocks
+
+Assistant messages contain typed content blocks:
+
+```go
+for _, block := range msg.ContentBlocks() {
+    switch b := block.(type) {
+    case casdk.TextBlock:
+        fmt.Println(b.Text)
+    case casdk.ToolUseBlock:
+        fmt.Printf("Tool: %s(%v)\n", b.Name, b.Input)
+    case casdk.ThinkingBlock:
+        fmt.Println("Thinking:", b.Thinking)
+    case casdk.ToolResultBlock:
+        fmt.Printf("Result: %s (error=%v)\n", b.Content, b.IsError)
+    }
+}
+```
+
+## Usage (Token Info)
+
+```go
+if u := msg.Usage(); u != nil {
+    fmt.Printf("In: %d, Out: %d, Cache: %d\n",
+        u.InputTokens, u.OutputTokens, u.CacheReadInputTokens)
+}
+```
+
+## Critical Rules
+
+1. **Always `defer client.Close()` and `defer msg.Close()`** — resource leaks otherwise.
+2. **`iter.Seq2` pattern** — `Query` and `ReceiveMessages` return Go 1.23+ range iterators.
+3. **`ANTHROPIC_API_KEY`** is required for `Query` and `Session`, but NOT for `ListSessions` / `GetSessionMessages`.
+4. **The SDK auto-installs** via uv on first `casdk.New()` call. No manual `pip install` needed.
+

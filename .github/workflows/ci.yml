@@ -1,0 +1,55 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  ci:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+        python-version: ["3.12", "3.13", "3.14"]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 5
+
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v6
+
+      - name: Install Python via uv
+        run: uv python install ${{ matrix.python-version }}
+
+      - name: Set Python library path (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          PYTHON_PREFIX=$(uv python find ${{ matrix.python-version }} | xargs dirname | xargs dirname)
+          echo "LD_LIBRARY_PATH=${PYTHON_PREFIX}/lib" >> $GITHUB_ENV
+          echo "PYTHONHOME=${PYTHON_PREFIX}" >> $GITHUB_ENV
+
+      - name: gofmt check
+        run: test -z "$(gofmt -l .)" || (gofmt -l .; exit 1)
+
+      - name: go vet
+        run: go vet -unsafeptr=false ./...
+
+      - name: Build
+        run: go build ./...
+
+      - name: Test
+        id: test
+        continue-on-error: true
+        run: go test -count=1 -timeout 60s -v ./...
+
+      - name: Retry Test
+        if: steps.test.outcome == 'failure'
+        run: go test -count=1 -timeout 60s -v ./...

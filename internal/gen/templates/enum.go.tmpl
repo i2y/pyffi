@@ -1,0 +1,10 @@
+{{define "enum"}}
+// {{.GoName}} represents the Python {{.PythonName}} enum.
+type {{.GoName}} int
+
+const (
+{{- range $i, $m := .Members}}
+	{{$m.GoName}}{{if eq $i 0}} {{$.GoName}} = iota{{end}}
+{{- end}}
+)
+{{end}}
