@@ -5,8 +5,9 @@ import (
 )
 
 // Message represents a message from the Claude Agent SDK.
+// All fields are eagerly extracted from the Python object during construction,
+// so Message does not require Close().
 type Message struct {
-	obj       *pyffi.Object
 	typ       string
 	text      string
 	model     string
@@ -49,16 +50,6 @@ func (m *Message) Usage() *Usage { return m.usage }
 // ContentBlocks returns the content blocks (for assistant messages).
 func (m *Message) ContentBlocks() []ContentBlock { return m.blocks }
 
-// Raw returns the underlying Python object for advanced access.
-func (m *Message) Raw() *pyffi.Object { return m.obj }
-
-// Close releases the underlying Python object.
-func (m *Message) Close() error {
-	if m.obj != nil {
-		return m.obj.Close()
-	}
-	return nil
-}
 
 // Usage holds token usage information.
 type Usage struct {
@@ -106,8 +97,11 @@ type ThinkingBlock struct {
 func (ThinkingBlock) contentBlock() {}
 
 // extractMessage extracts a Go Message from a Python message object.
+// The Python object is closed before returning; the caller does not need
+// to close the returned Message.
 func extractMessage(obj *pyffi.Object) *Message {
-	msg := &Message{obj: obj}
+	defer obj.Close()
+	msg := &Message{}
 
 	cls := obj.Attr("__class__")
 	if cls != nil {

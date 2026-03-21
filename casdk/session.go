@@ -144,7 +144,6 @@ func (s *Session) ReceiveMessages() iter.Seq2[*Message, error] {
 			}
 			msg := extractMessage(itemObj)
 			if !yield(msg, nil) {
-				msg.Close()
 				return
 			}
 		}

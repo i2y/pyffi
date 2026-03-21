@@ -36,8 +36,6 @@ func main() {
 		if err != nil {
 			log.Fatal(err)
 		}
-		defer msg.Close()
-
 		switch msg.Type() {
 		case "assistant":
 			for _, block := range msg.ContentBlocks() {

@@ -16,7 +16,6 @@
 //	    casdk.WithModel("sonnet"),
 //	) {
 //	    if err != nil { log.Fatal(err) }
-//	    defer msg.Close()
 //	    if msg.Type() == "assistant" {
 //	        for _, block := range msg.ContentBlocks() {
 //	            if tb, ok := block.(casdk.TextBlock); ok {
@@ -35,13 +34,11 @@
 //
 //	session.Query("What files are in this directory?")
 //	for msg, _ := range session.ReceiveMessages() {
-//	    defer msg.Close()
 //	    fmt.Println(msg.Text())
 //	}
 //
 //	session.Query("Now explain the main.go file")
 //	for msg, _ := range session.ReceiveMessages() {
-//	    defer msg.Close()
 //	    fmt.Println(msg.Text())
 //	}
 //
@@ -118,11 +115,9 @@ func (c *Client) Runtime() *pyffi.Runtime {
 }
 
 // Query sends a prompt to Claude and returns an iterator over response messages.
-// The caller must close each Message after use.
 //
 //	for msg, err := range client.Query(ctx, "Hello") {
 //	    if err != nil { log.Fatal(err) }
-//	    defer msg.Close()
 //	    fmt.Println(msg.Text())
 //	}
 func (c *Client) Query(ctx context.Context, prompt string, opts ...QueryOption) iter.Seq2[*Message, error] {
@@ -217,7 +212,6 @@ _pyffi_query_result = asyncio.run(_pyffi_run_query(_pyffi_prompt))
 			}
 			msg := extractMessage(itemObj)
 			if !yield(msg, nil) {
-				msg.Close()
 				return
 			}
 		}
