@@ -10,17 +10,17 @@ type {{.GoName}} struct {
 
 {{if .Init}}
 // New{{.GoName}} creates a new {{.PythonName}} instance.
-func (m *Module) New{{.GoName}}({{range $i, $p := .Init.Params}}{{if $i}}, {{end}}{{$p.GoName}} {{safeParamType $p.Type}}{{end}}) (*{{.GoName}}, error) {
+func (m *Module) New{{.GoName}}({{requiredParams .Init.Params}}) (*{{.GoName}}, error) {
 	cls := m.mod.Attr("{{.PythonName}}")
 	if cls == nil {
 		return nil, fmt.Errorf("class {{.PythonName}} not found")
 	}
 	defer cls.Close()
-	obj, err := cls.Call({{range $i, $p := .Init.Params}}{{if $i}}, {{end}}{{$p.GoName}}{{end}})
+	{{- callExprCls .Init.Params}}
 	if err != nil {
 		return nil, err
 	}
-	return &{{.GoName}}{obj: obj, rt: m.rt}, nil
+	return &{{.GoName}}{obj: result, rt: m.rt}, nil
 }
 {{end}}
 
@@ -40,13 +40,13 @@ func (w *{{.GoName}}) Object() *pyffi.Object {
 {{- else}}
 // {{.GoName}} wraps {{$.PythonName}}.{{.PythonName}}.
 {{- end}}
-func (w *{{$.GoName}}) {{.GoName}}({{range $i, $p := .Params}}{{if $i}}, {{end}}{{$p.GoName}} {{safeParamType $p.Type}}{{end}}) ({{if .Returns.Go}}{{safeReturnType .Returns}}, {{end}}error) {
+func (w *{{$.GoName}}) {{.GoName}}({{requiredParams .Params}}) ({{if .Returns.Go}}{{safeReturnType .Returns}}, {{end}}error) {
 	fn := w.obj.Attr("{{.PythonName}}")
 	if fn == nil {
 		return {{zeroVal (safeReturnType .Returns)}}fmt.Errorf("{{.PythonName}} not found")
 	}
 	defer fn.Close()
-	result, err := fn.Call({{range $i, $p := .Params}}{{if $i}}, {{end}}{{$p.GoName}}{{end}})
+	{{- callExpr .Params}}
 	if err != nil {
 		return {{zeroVal (safeReturnType .Returns)}}err
 	}

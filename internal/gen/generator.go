@@ -123,6 +123,7 @@ func (g *Generator) render(info *ModuleInfo, mainTemplate string) ([]byte, error
 			return requiredParams(params, classNames)
 		},
 		"callExpr":       callExpr,
+		"callExprCls":    callExprCls,
 		"safeReturnType": func(t TypeInfo) string { return resolveGoType(t.Go, classNames) },
 		"safeParamType":  func(t TypeInfo) string { return resolveGoType(t.Go, classNames) },
 	}
@@ -188,8 +189,8 @@ func requiredParams(params []ParamInfo, classNames map[string]bool) string {
 	return strings.Join(required, ", ")
 }
 
-// callExpr generates the Call/CallKw expression for a function.
-func callExpr(params []ParamInfo) string {
+// callExprOn generates the Call/CallKw expression for a given callable variable name.
+func callExprOn(target string, params []ParamInfo) string {
 	var required []string
 	var optional []ParamInfo
 	for _, p := range params {
@@ -201,12 +202,10 @@ func callExpr(params []ParamInfo) string {
 	}
 
 	if len(optional) == 0 {
-		// Simple case: all required.
 		args := strings.Join(required, ", ")
-		return "\n\tresult, err := fn.Call(" + args + ")"
+		return "\n\tresult, err := " + target + ".Call(" + args + ")"
 	}
 
-	// Has optional: use CallKw when opts provided.
 	args := strings.Join(required, ", ")
 	var b strings.Builder
 	b.WriteString("\n\targs := []any{")
@@ -216,8 +215,18 @@ func callExpr(params []ParamInfo) string {
 	b.WriteString("\n\tif len(opts) > 0 {")
 	b.WriteString("\n\t\tkw = opts[0]")
 	b.WriteString("\n\t}")
-	b.WriteString("\n\tresult, err := fn.CallKw(args, kw)")
+	b.WriteString("\n\tresult, err := " + target + ".CallKw(args, kw)")
 	return b.String()
+}
+
+// callExpr generates the Call/CallKw expression using "fn" as the target.
+func callExpr(params []ParamInfo) string {
+	return callExprOn("fn", params)
+}
+
+// callExprCls generates the Call/CallKw expression using "cls" as the target.
+func callExprCls(params []ParamInfo) string {
+	return callExprOn("cls", params)
 }
 
 // resolveGoType returns a Go type string that is valid in generated code.
