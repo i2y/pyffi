@@ -1,5 +1,7 @@
 # oasdk
 
+> **Note:** This package exists as a demonstration of wrapping a Python SDK with pyffi. In practice, the OpenAI Agents SDK's core logic (LLM API calls + agent loop) can be reimplemented in pure Go without a Python dependency, and native Go alternatives like [openai-agents-go](https://github.com/MitulShah1/openai-agents-go) or [swarmgo](https://github.com/prathyushnallamothu/swarmgo) may be more practical for production use. For a better example of pyffi's value — wrapping a library that **cannot** be reimplemented in Go — see [sbert](../sbert/) (sentence-transformers) or [casdk](../casdk/) (Claude Agent SDK with CLI subprocess protocol).
+
 Go wrapper for the [OpenAI Agents SDK](https://github.com/openai/openai-agents-python) — powered by [pyffi](https://github.com/i2y/pyffi).
 
 The SDK is auto-installed via uv on first use. No manual Python setup required beyond having Python 3.12+ available.
