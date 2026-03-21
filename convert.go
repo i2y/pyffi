@@ -2,9 +2,17 @@ package pyffi
 
 import (
 	"fmt"
+	"reflect"
 	"runtime"
 	"unsafe"
 )
+
+// PyObjecter is implemented by types that wrap a Python object.
+// pyffi-gen generated types satisfy this interface automatically.
+// When passed to Python, the underlying object is used directly.
+type PyObjecter interface {
+	Object() *Object
+}
 
 // goToPython converts a Go value to a new-reference PyObject*.
 // The caller owns the returned reference.
@@ -18,6 +26,20 @@ func (r *Runtime) goToPython(v any) (uintptr, error) {
 		r.pyIncRef(val.ptr)
 		runtime.KeepAlive(val)
 		return val.ptr, nil
+	case PyObjecter:
+		rv := reflect.ValueOf(val)
+		if rv.Kind() == reflect.Ptr && rv.IsNil() {
+			r.pyIncRef(r.pyNone)
+			return r.pyNone, nil
+		}
+		obj := val.Object()
+		if obj == nil || obj.ptr == 0 {
+			r.pyIncRef(r.pyNone)
+			return r.pyNone, nil
+		}
+		r.pyIncRef(obj.ptr)
+		runtime.KeepAlive(obj)
+		return obj.ptr, nil
 	case bool:
 		// bool must come before int types because Go's type switch is exact.
 		var n int64

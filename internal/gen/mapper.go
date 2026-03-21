@@ -292,6 +292,7 @@ func GoFuncName(pyName string) string {
 
 // Go reserved words that cannot be used as parameter names.
 var goReserved = map[string]string{
+	// Go keywords
 	"break": "break_", "case": "case_", "chan": "chan_", "const": "const_",
 	"continue": "continue_", "default": "default_", "defer": "defer_",
 	"else": "else_", "fallthrough": "fallthrough_", "for": "for_",
@@ -300,6 +301,8 @@ var goReserved = map[string]string{
 	"package": "package_", "range": "range_", "return": "return_",
 	"select": "select_", "struct": "struct_", "switch": "switch_",
 	"type": "type_", "var": "var_",
+	// Packages used in generated code
+	"fmt": "fmt_", "pyffi": "pyffi_",
 }
 
 // GoParamName converts snake_case to camelCase, escaping Go reserved words.
