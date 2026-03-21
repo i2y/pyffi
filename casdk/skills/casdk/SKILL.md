@@ -33,7 +33,7 @@ for msg, err := range client.Query(ctx, "Explain Go interfaces",
     casdk.WithModel("sonnet"),
 ) {
     if err != nil { log.Fatal(err) }
-    defer msg.Close()
+
 
     switch msg.Type() {
     case "assistant":
@@ -64,13 +64,13 @@ defer session.Close()
 
 session.Query("What files are in this directory?")
 for msg, _ := range session.ReceiveMessages() {
-    defer msg.Close()
+
     fmt.Println(msg.Text())
 }
 
 session.Query("Now explain the main.go file")
 for msg, _ := range session.ReceiveMessages() {
-    defer msg.Close()
+
     fmt.Println(msg.Text())
 }
 ```
@@ -198,7 +198,7 @@ if u := msg.Usage(); u != nil {
 
 ## Critical Rules
 
-1. **Always `defer client.Close()` and `defer msg.Close()`** — resource leaks otherwise.
+1. **Always `defer client.Close()` and `defer session.Close()`** — resource leaks otherwise. Messages do not need closing.
 2. **`iter.Seq2` pattern** — `Query` and `ReceiveMessages` return Go 1.23+ range iterators.
 3. **`ANTHROPIC_API_KEY`** is required for `Query` and `Session`, but NOT for `ListSessions` / `GetSessionMessages`.
 4. **The SDK auto-installs** via uv on first `casdk.New()` call. No manual `pip install` needed.

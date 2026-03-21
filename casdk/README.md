@@ -27,7 +27,7 @@ for msg, err := range client.Query(ctx, "Explain Go interfaces",
     casdk.WithModel("sonnet"),
 ) {
     if err != nil { log.Fatal(err) }
-    defer msg.Close()
+
 
     if msg.Type() == "assistant" {
         for _, block := range msg.ContentBlocks() {
@@ -59,14 +59,14 @@ defer session.Close()
 
 session.Query("What files are in this directory?")
 for msg, _ := range session.ReceiveMessages() {
-    defer msg.Close()
+
     fmt.Println(msg.Text())
 }
 
 // Follow-up — context is retained
 session.Query("Now explain the main.go file")
 for msg, _ := range session.ReceiveMessages() {
-    defer msg.Close()
+
     fmt.Println(msg.Text())
 }
 ```

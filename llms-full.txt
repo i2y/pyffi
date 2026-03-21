@@ -372,7 +372,7 @@ for msg, err := range client.Query(ctx, "What is 2+2?",
     casdk.WithMaxTurns(1),
 ) {
     if err != nil { log.Fatal(err) }
-    defer msg.Close()
+
     fmt.Println(msg.Text())
 }
 
@@ -1206,7 +1206,7 @@ for msg, err := range client.Query(ctx, "Explain Go interfaces",
     casdk.WithModel("sonnet"),
 ) {
     if err != nil { log.Fatal(err) }
-    defer msg.Close()
+
 
     if msg.Type() == "assistant" {
         for _, block := range msg.ContentBlocks() {
@@ -1238,14 +1238,14 @@ defer session.Close()
 
 session.Query("What files are in this directory?")
 for msg, _ := range session.ReceiveMessages() {
-    defer msg.Close()
+
     fmt.Println(msg.Text())
 }
 
 // Follow-up — context is retained
 session.Query("Now explain the main.go file")
 for msg, _ := range session.ReceiveMessages() {
-    defer msg.Close()
+
     fmt.Println(msg.Text())
 }
 ```
@@ -1427,7 +1427,7 @@ for _, block := range msg.ContentBlocks() {
 //	    casdk.WithModel("sonnet"),
 //	) {
 //	    if err != nil { log.Fatal(err) }
-//	    defer msg.Close()
+//	
 //	    if msg.Type() == "assistant" {
 //	        for _, block := range msg.ContentBlocks() {
 //	            if tb, ok := block.(casdk.TextBlock); ok {
@@ -1446,13 +1446,13 @@ for _, block := range msg.ContentBlocks() {
 //
 //	session.Query("What files are in this directory?")
 //	for msg, _ := range session.ReceiveMessages() {
-//	    defer msg.Close()
+//	
 //	    fmt.Println(msg.Text())
 //	}
 //
 //	session.Query("Now explain the main.go file")
 //	for msg, _ := range session.ReceiveMessages() {
-//	    defer msg.Close()
+//	
 //	    fmt.Println(msg.Text())
 //	}
 //
@@ -1487,7 +1487,7 @@ func (c *Client) Runtime() *pyffi.Runtime {
 //
 //	for msg, err := range client.Query(ctx, "Hello") {
 //	    if err != nil { log.Fatal(err) }
-//	    defer msg.Close()
+//	
 //	    fmt.Println(msg.Text())
 //	}
 func (c *Client) Query(ctx context.Context, prompt string, opts ...QueryOption) iter.Seq2[*Message, error] {
@@ -1874,7 +1874,7 @@ client, _ := casdk.New()
 defer client.Close()
 for msg, err := range client.Query(ctx, "prompt", casdk.WithMaxTurns(1)) {
     if err != nil { break }
-    defer msg.Close()
+
     fmt.Println(msg.Text())
 }
 
@@ -1973,7 +1973,7 @@ for msg, err := range client.Query(ctx, "Explain Go interfaces",
     casdk.WithModel("sonnet"),
 ) {
     if err != nil { log.Fatal(err) }
-    defer msg.Close()
+
 
     switch msg.Type() {
     case "assistant":
@@ -2004,13 +2004,13 @@ defer session.Close()
 
 session.Query("What files are in this directory?")
 for msg, _ := range session.ReceiveMessages() {
-    defer msg.Close()
+
     fmt.Println(msg.Text())
 }
 
 session.Query("Now explain the main.go file")
 for msg, _ := range session.ReceiveMessages() {
-    defer msg.Close()
+
     fmt.Println(msg.Text())
 }
 ```
@@ -2138,7 +2138,7 @@ if u := msg.Usage(); u != nil {
 
 ## Critical Rules
 
-1. **Always `defer client.Close()` and `defer msg.Close()`** — resource leaks otherwise.
+1. **Always `defer client.Close()` and `defer session.Close()`** — resource leaks otherwise. Messages do not need closing.
 2. **`iter.Seq2` pattern** — `Query` and `ReceiveMessages` return Go 1.23+ range iterators.
 3. **`ANTHROPIC_API_KEY`** is required for `Query` and `Session`, but NOT for `ListSessions` / `GetSessionMessages`.
 4. **The SDK auto-installs** via uv on first `casdk.New()` call. No manual `pip install` needed.

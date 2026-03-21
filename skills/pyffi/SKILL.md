@@ -151,7 +151,6 @@ client, _ := casdk.New()
 defer client.Close()
 for msg, err := range client.Query(ctx, "prompt", casdk.WithMaxTurns(1)) {
     if err != nil { break }
-    defer msg.Close()
     fmt.Println(msg.Text())
 }
 
