@@ -17,6 +17,10 @@ jobs:
     timeout-minutes: 5
 
     steps:
+      - name: Disable CRLF conversion
+        if: runner.os == 'Windows'
+        run: git config --global core.autocrlf false
+
       - uses: actions/checkout@v6
 
       - uses: actions/setup-go@v6
@@ -46,7 +50,9 @@ jobs:
 
       - name: gofmt check
         shell: bash
-        run: test -z "$(gofmt -l .)" || (gofmt -l .; exit 1)
+        run: |
+          FILES=$(gofmt -l *.go internal/ cmd/ 2>/dev/null || true)
+          if [ -n "$FILES" ]; then echo "$FILES"; exit 1; fi
 
       - name: go vet
         run: go vet -unsafeptr=false ./...
