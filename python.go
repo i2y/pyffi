@@ -346,7 +346,7 @@ func New(opts ...Option) (*Runtime, error) {
 		return nil, err
 	}
 
-	handle, err := purego.Dlopen(path, purego.RTLD_NOW|purego.RTLD_GLOBAL)
+	handle, err := openLibrary(path)
 	if err != nil {
 		return nil, fmt.Errorf("pyffi: failed to load %s: %w", path, err)
 	}
@@ -875,7 +875,7 @@ func (r *Runtime) bindFunctions() (err error) {
 
 	// Global singletons
 	var err2 error
-	r.pyNone, err2 = purego.Dlsym(r.handle, "_Py_NoneStruct")
+	r.pyNone, err2 = loadSymbol(r.handle, "_Py_NoneStruct")
 	if err2 != nil {
 		return fmt.Errorf("pyffi: failed to find _Py_NoneStruct: %w", err2)
 	}
@@ -919,7 +919,7 @@ func (r *Runtime) cacheTypePointers() {
 // bindRunStringFlags tries to bind PyRun_StringFlags for structured Exec error handling.
 // PyRun_String is a macro in CPython; the actual symbol is PyRun_StringFlags.
 func (r *Runtime) bindRunStringFlags() {
-	if _, err := purego.Dlsym(r.handle, "PyRun_StringFlags"); err != nil {
+	if _, err := loadSymbol(r.handle, "PyRun_StringFlags"); err != nil {
 		return
 	}
 	purego.RegisterLibFunc(&r.pyRunStringFlags, r.handle, "PyRun_StringFlags")
@@ -932,7 +932,7 @@ func (r *Runtime) bindErrGetRaisedException() {
 	// Check if the symbol exists before binding.
 	// purego.RegisterLibFunc panics if the symbol is not found,
 	// but we only want to skip binding for missing symbols, not hide other errors.
-	if _, err := purego.Dlsym(r.handle, "PyErr_GetRaisedException"); err != nil {
+	if _, err := loadSymbol(r.handle, "PyErr_GetRaisedException"); err != nil {
 		return // Python < 3.12, fall back to PyErr_Print
 	}
 	purego.RegisterLibFunc(&r.pyErrGetRaisedException, r.handle, "PyErr_GetRaisedException")

@@ -563,7 +563,7 @@ See the [peftgo README](peftgo/README.md).
 
 - **Process exit SIGSEGV**: When using Python libraries with background threads (PyTorch, datasets, etc.), a SIGSEGV may occur during process shutdown. This does not affect program correctness — it only happens after `main()` returns and the OS is about to reclaim all resources anyway. Long-running servers are unaffected since the issue only occurs at process exit.
 - **`Py_Finalize` instability**: CPython's `Py_Finalize` does not work reliably with all extension modules. Use `pyffi.WithSkipFinalize()` if you encounter issues. Resources are reclaimed by the OS on process exit.
-- **Windows**: Not yet supported.
+- **Windows**: Experimental. The code compiles and Python DLL detection is implemented, but CI testing is in progress.
 
 ## For LLM Agents
 

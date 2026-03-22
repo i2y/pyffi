@@ -11,7 +11,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, macos-latest]
+        os: [ubuntu-latest, macos-latest, windows-latest]
         python-version: ["3.12", "3.13", "3.14"]
     runs-on: ${{ matrix.os }}
     timeout-minutes: 5
@@ -36,7 +36,16 @@ jobs:
           echo "LD_LIBRARY_PATH=${PYTHON_PREFIX}/lib" >> $GITHUB_ENV
           echo "PYTHONHOME=${PYTHON_PREFIX}" >> $GITHUB_ENV
 
+      - name: Set Python library path (Windows)
+        if: runner.os == 'Windows'
+        shell: bash
+        run: |
+          PYTHON_EXE=$(uv python find ${{ matrix.python-version }})
+          PYTHON_DIR=$(dirname "$PYTHON_EXE")
+          echo "PATH=${PYTHON_DIR};${PATH}" >> $GITHUB_ENV
+
       - name: gofmt check
+        shell: bash
         run: test -z "$(gofmt -l .)" || (gofmt -l .; exit 1)
 
       - name: go vet
