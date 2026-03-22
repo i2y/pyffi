@@ -396,14 +396,16 @@ func New(opts ...Option) (*Runtime, error) {
 func (r *Runtime) Close() error {
 	r.closeOnce.Do(func() {
 		runtime.SetFinalizer(r, nil)
+		// Acquire GIL via autoGIL (works from any thread).
+		g := r.autoGIL()
+		// Set closed BEFORE Py_Finalize so that concurrent finalizers
+		// see the flag and bail out instead of calling into a dead runtime.
 		r.closed.Store(true)
 		if !r.skipFinalize {
-			// Acquire GIL via autoGIL (works from any thread).
-			g := r.autoGIL()
 			r.pyFinalize()
-			// Don't release GIL after Finalize — the interpreter is gone.
-			_ = g
 		}
+		// Don't release GIL after Finalize — the interpreter is gone.
+		_ = g
 	})
 	return nil
 }

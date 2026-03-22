@@ -518,6 +518,53 @@ for msg, err := range client.Query(ctx, "What is 2+2?", casdk.WithMaxTurns(1)) {
 
 See the [casdk README](casdk/README.md).
 
+### datasetsgo — Hugging Face Datasets
+
+Access 200,000+ datasets on the [Hugging Face Hub](https://huggingface.co/datasets) from Go.
+
+```bash
+go get github.com/i2y/pyffi/datasetsgo
+```
+
+```go
+client, _ := datasetsgo.New()
+defer client.Close()
+
+ds, _ := client.Load("rotten_tomatoes")
+train := ds.Split("train")
+fmt.Println(train.Len())       // 8530
+row, _ := train.Row(0)
+fmt.Println(row["text"])
+```
+
+See the [datasetsgo README](datasetsgo/README.md).
+
+### peftgo — LoRA Fine-Tuning
+
+Fine-tune large models with [PEFT](https://github.com/huggingface/peft) (LoRA, etc.) from Go.
+
+```bash
+go get github.com/i2y/pyffi/peftgo
+```
+
+```go
+model, _ := peftgo.NewModel("meta-llama/Llama-3-8B", peftgo.WithDevice("auto"))
+defer model.Close()
+
+model.ApplyLoRA(peftgo.LoRAConfig{Rank: 16, Alpha: 32})
+trainable, total, pct := model.TrainableParams()
+fmt.Printf("Trainable: %d / %d (%.2f%%)\n", trainable, total, pct)
+model.SaveAdapter("./my-adapter")
+```
+
+See the [peftgo README](peftgo/README.md).
+
+## Known Limitations
+
+- **Process exit SIGSEGV**: When using Python libraries with background threads (PyTorch, datasets, etc.), a SIGSEGV may occur during process shutdown. This does not affect program correctness — it only happens after `main()` returns and the OS is about to reclaim all resources anyway. Long-running servers are unaffected since the issue only occurs at process exit.
+- **`Py_Finalize` instability**: CPython's `Py_Finalize` does not work reliably with all extension modules. Use `pyffi.WithSkipFinalize()` if you encounter issues. Resources are reclaimed by the OS on process exit.
+- **Windows**: Not yet supported.
+
 ## For LLM Agents
 
 This project includes AgentSkills for AI coding assistants:
