@@ -330,8 +330,9 @@ func TestAttrChain(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if s != "a/b/c" {
-		t.Fatalf("got %q, want %q", s, "a/b/c")
+	// os.path.join uses "/" on Unix and "\" on Windows.
+	if s != "a/b/c" && s != `a\b\c` {
+		t.Fatalf("got %q, want %q or %q", s, "a/b/c", `a\b\c`)
 	}
 }
 
