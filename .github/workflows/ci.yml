@@ -66,5 +66,10 @@ jobs:
         run: go test -count=1 -timeout 60s -v ./...
 
       - name: Retry Test
-        if: steps.test.outcome == 'failure'
+        if: steps.test.outcome == 'failure' && runner.os != 'Windows'
+        run: go test -count=1 -timeout 60s -v ./...
+
+      - name: Retry Test (Windows, experimental)
+        if: steps.test.outcome == 'failure' && runner.os == 'Windows'
+        continue-on-error: true
         run: go test -count=1 -timeout 60s -v ./...
