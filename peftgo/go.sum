@@ -1,4 +1,4 @@
 github.com/ebitengine/purego v0.10.0 h1:QIw4xfpWT6GWTzaW5XEKy3HXoqrJGx1ijYHzTF0/ISU=
 github.com/ebitengine/purego v0.10.0/go.mod h1:iIjxzd6CiRiOG0UyXP+V1+jWqUXVjPKLAI0mRfJZTmQ=
-github.com/i2y/pyffi v0.4.0 h1:pNy4McBo6SPrS3yO/GlQTUFc6+FrCfu2CuTd3gRfHQI=
-github.com/i2y/pyffi v0.4.0/go.mod h1:RvTA6vSt9c9FkDOCZjJo2zyGxfZEMDlZv23TEBPwmec=
+github.com/i2y/pyffi v0.5.0 h1:86AZhFWlAKsEVS2lOIFQXZ2K/O8OQihsr4HyCB2vKsQ=
+github.com/i2y/pyffi v0.5.0/go.mod h1:RvTA6vSt9c9FkDOCZjJo2zyGxfZEMDlZv23TEBPwmec=
