@@ -484,8 +484,14 @@ func (r *Runtime) callKw(callable uintptr, args []any, kwargs map[string]any) (*
 // context cancellation and deadlines. If the context is cancelled before the
 // Python call completes, the Go caller returns ctx.Err() immediately.
 //
-// The Python call continues running in a background goroutine until it
-// naturally completes; its result is automatically cleaned up.
+// Caveat: the Python call itself cannot be interrupted from Go. When the
+// context is cancelled, the background goroutine (and the OS thread pinned
+// by the GIL) remains blocked until the Python function returns naturally.
+// If the function never returns, the goroutine and OS thread are leaked.
+// This method is best suited for Python functions that are slow but
+// eventually complete; it is not a safeguard against functions that block
+// indefinitely.
+//
 // If the last argument is of type KW, it is used as keyword arguments.
 func (o *Object) CallContext(ctx context.Context, args ...any) (*Object, error) {
 	if o == nil || o.ptr == 0 {
@@ -503,8 +509,13 @@ func (o *Object) CallContext(ctx context.Context, args ...any) (*Object, error) 
 // respecting context cancellation and deadlines. If the context is cancelled
 // before the Python call completes, the Go caller returns ctx.Err() immediately.
 //
-// The Python call continues running in a background goroutine until it
-// naturally completes; its result is automatically cleaned up.
+// Caveat: the Python call itself cannot be interrupted from Go. When the
+// context is cancelled, the background goroutine (and the OS thread pinned
+// by the GIL) remains blocked until the Python function returns naturally.
+// If the function never returns, the goroutine and OS thread are leaked.
+// This method is best suited for Python functions that are slow but
+// eventually complete; it is not a safeguard against functions that block
+// indefinitely.
 func (o *Object) CallKwContext(ctx context.Context, args []any, kwargs map[string]any) (*Object, error) {
 	if o == nil || o.ptr == 0 {
 		return nil, ErrNilObject
