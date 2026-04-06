@@ -1,5 +1,7 @@
 package pyffi
 
+import "context"
+
 // BoundModule wraps an imported Python module for convenient function calls.
 type BoundModule struct {
 	rt     *Runtime
@@ -43,6 +45,36 @@ func (m *BoundModule) CallKw(name string, args []any, kwargs map[string]any) (*O
 	}
 	defer fn.Close()
 	return fn.CallKw(args, kwargs)
+}
+
+// CallContext calls a named function on the module, respecting context
+// cancellation and deadlines. See Object.CallContext for details.
+func (m *BoundModule) CallContext(ctx context.Context, name string, args ...any) (*Object, error) {
+	fn := m.module.Attr(name)
+	if fn == nil {
+		return nil, &PythonError{
+			Context: "Bind.CallContext",
+			Type:    "AttributeError",
+			Message: m.name + " has no attribute " + name,
+		}
+	}
+	defer fn.Close()
+	return fn.CallContext(ctx, args...)
+}
+
+// CallKwContext calls a named function with positional and keyword arguments,
+// respecting context cancellation and deadlines. See Object.CallKwContext for details.
+func (m *BoundModule) CallKwContext(ctx context.Context, name string, args []any, kwargs map[string]any) (*Object, error) {
+	fn := m.module.Attr(name)
+	if fn == nil {
+		return nil, &PythonError{
+			Context: "Bind.CallKwContext",
+			Type:    "AttributeError",
+			Message: m.name + " has no attribute " + name,
+		}
+	}
+	defer fn.Close()
+	return fn.CallKwContext(ctx, args, kwargs)
 }
 
 // Has reports whether the module has an attribute with the given name.

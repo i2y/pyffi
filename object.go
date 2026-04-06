@@ -1,6 +1,7 @@
 package pyffi
 
 import (
+	"context"
 	"fmt"
 	"runtime"
 	"sync/atomic"
@@ -413,65 +414,143 @@ func (o *Object) CallKw(args []any, kwargs map[string]any) (*Object, error) {
 	if o == nil || o.ptr == 0 {
 		return nil, ErrNilObject
 	}
-	g := o.rt.autoGIL()
+	return o.rt.callKw(o.ptr, args, kwargs)
+}
+
+// callKw is the internal implementation shared by CallKw and CallKwContext.
+// It acquires the GIL, builds the args tuple and kwargs dict, and calls the
+// Python callable identified by the raw pointer.
+func (r *Runtime) callKw(callable uintptr, args []any, kwargs map[string]any) (*Object, error) {
+	g := r.autoGIL()
 	defer g.release()
-	rt := o.rt
 
 	// Build args tuple.
-	tuple := rt.pyTupleNew(int64(len(args)))
+	tuple := r.pyTupleNew(int64(len(args)))
 	if tuple == 0 {
-		return nil, rt.currentError("Call: PyTuple_New")
+		return nil, r.currentError("Call: PyTuple_New")
 	}
 	for i, arg := range args {
-		pyArg, err := rt.goToPython(arg)
+		pyArg, err := r.goToPython(arg)
 		if err != nil {
-			rt.pyDecRef(tuple)
+			r.pyDecRef(tuple)
 			return nil, fmt.Errorf("pyffi: Call arg %d: %w", i, err)
 		}
 		// PyTuple_SetItem steals the reference.
-		if rt.pyTupleSetItem(tuple, int64(i), pyArg) != 0 {
-			rt.pyDecRef(tuple)
-			return nil, rt.currentError("Call: PyTuple_SetItem")
+		if r.pyTupleSetItem(tuple, int64(i), pyArg) != 0 {
+			r.pyDecRef(tuple)
+			return nil, r.currentError("Call: PyTuple_SetItem")
 		}
 	}
 
 	// Build kwargs dict.
 	var kw uintptr
 	if len(kwargs) > 0 {
-		kw = rt.pyDictNew()
+		kw = r.pyDictNew()
 		if kw == 0 {
-			rt.pyDecRef(tuple)
-			return nil, rt.currentError("Call: PyDict_New")
+			r.pyDecRef(tuple)
+			return nil, r.currentError("Call: PyDict_New")
 		}
 		for k, v := range kwargs {
-			pyVal, err := rt.goToPython(v)
+			pyVal, err := r.goToPython(v)
 			if err != nil {
-				rt.pyDecRef(tuple)
-				rt.pyDecRef(kw)
+				r.pyDecRef(tuple)
+				r.pyDecRef(kw)
 				return nil, fmt.Errorf("pyffi: Call kwarg %q: %w", k, err)
 			}
 			// PyDict_SetItemString does NOT steal the reference.
-			if rt.pyDictSetItemString(kw, k, pyVal) != 0 {
-				rt.pyDecRef(pyVal)
-				rt.pyDecRef(tuple)
-				rt.pyDecRef(kw)
-				return nil, rt.currentError("Call: PyDict_SetItemString")
+			if r.pyDictSetItemString(kw, k, pyVal) != 0 {
+				r.pyDecRef(pyVal)
+				r.pyDecRef(tuple)
+				r.pyDecRef(kw)
+				return nil, r.currentError("Call: PyDict_SetItemString")
 			}
-			rt.pyDecRef(pyVal)
+			r.pyDecRef(pyVal)
 		}
 	}
 
-	result := rt.pyObjectCall(o.ptr, tuple, kw)
-	runtime.KeepAlive(o)
-	rt.pyDecRef(tuple)
+	result := r.pyObjectCall(callable, tuple, kw)
+	r.pyDecRef(tuple)
 	if kw != 0 {
-		rt.pyDecRef(kw)
+		r.pyDecRef(kw)
 	}
 
 	if result == 0 {
-		return nil, rt.currentError("Call")
+		return nil, r.currentError("Call")
 	}
-	return rt.newObject(result), nil
+	return r.newObject(result), nil
+}
+
+// CallContext calls this object with the given arguments, respecting
+// context cancellation and deadlines. If the context is cancelled before the
+// Python call completes, the Go caller returns ctx.Err() immediately.
+//
+// The Python call continues running in a background goroutine until it
+// naturally completes; its result is automatically cleaned up.
+// If the last argument is of type KW, it is used as keyword arguments.
+func (o *Object) CallContext(ctx context.Context, args ...any) (*Object, error) {
+	if o == nil || o.ptr == 0 {
+		return nil, ErrNilObject
+	}
+	if len(args) > 0 {
+		if kw, ok := args[len(args)-1].(KW); ok {
+			return o.CallKwContext(ctx, args[:len(args)-1], kw)
+		}
+	}
+	return o.CallKwContext(ctx, args, nil)
+}
+
+// CallKwContext calls this object with positional and keyword arguments,
+// respecting context cancellation and deadlines. If the context is cancelled
+// before the Python call completes, the Go caller returns ctx.Err() immediately.
+//
+// The Python call continues running in a background goroutine until it
+// naturally completes; its result is automatically cleaned up.
+func (o *Object) CallKwContext(ctx context.Context, args []any, kwargs map[string]any) (*Object, error) {
+	if o == nil || o.ptr == 0 {
+		return nil, ErrNilObject
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+
+	rt := o.rt
+
+	// IncRef the callable so it stays alive even if the caller closes the
+	// Object after we return due to context cancellation.
+	g := rt.autoGIL()
+	rt.pyIncRef(o.ptr)
+	callablePtr := o.ptr
+	g.release()
+
+	type callResult struct {
+		obj *Object
+		err error
+	}
+	ch := make(chan callResult, 1)
+
+	go func() {
+		result, err := rt.callKw(callablePtr, args, kwargs)
+
+		cg := rt.autoGIL()
+		rt.pyDecRef(callablePtr)
+		cg.release()
+
+		ch <- callResult{obj: result, err: err}
+	}()
+
+	select {
+	case <-ctx.Done():
+		// Drain the result in a background goroutine to clean up properly.
+		go func() {
+			r := <-ch
+			if r.obj != nil {
+				r.obj.Close()
+			}
+		}()
+		return nil, ctx.Err()
+	case r := <-ch:
+		return r.obj, r.err
+	}
 }
 
 // CallAsync calls an async Python function with the given arguments,
